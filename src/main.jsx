@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import initSqlJs from 'sql.js';
 import sqlWasmUrl from 'sql.js/dist/sql-wasm.wasm?url';
@@ -54,8 +54,18 @@ function LibraryCard({ tweet, mediaFiles, onOpen }) {
 
 function MediaPreview({ media, mediaFiles }) {
   const file = mediaFiles.get(media.filename);
+  const [src, setSrc] = useState('');
+  useEffect(() => {
+    if (!file) {
+      setSrc('');
+      return undefined;
+    }
+    const objectUrl = URL.createObjectURL(file);
+    setSrc(objectUrl);
+    return () => URL.revokeObjectURL(objectUrl);
+  }, [file]);
   if (!file) return <div className="media-missing"><span>{media.type === 'video' ? '▶' : '◇'}</span><small>{media.filename || media.type}</small></div>;
-  const src = URL.createObjectURL(file);
+  if (!src) return <div className="media-missing"><span>◇</span></div>;
   if (isVideoMedia(media, file)) return <video src={src} muted preload="metadata" controls playsInline onClick={(event) => event.stopPropagation()} />;
   return <img src={src} alt="" />;
 }
@@ -67,6 +77,8 @@ function App() {
   const [filter, setFilter] = useState('all');
   const [mediaTypeFilter, setMediaTypeFilter] = useState('all');
   const [sort, setSort] = useState('newest');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(24);
   const [selected, setSelected] = useState(null);
   const [tagDraft, setTagDraft] = useState('');
   const [databaseName, setDatabaseName] = useState('bookmarks.db');
@@ -191,6 +203,13 @@ function App() {
     }).sort((a, b) => sort === 'oldest' ? new Date(a.createdAt) - new Date(b.createdAt) : new Date(b.createdAt) - new Date(a.createdAt));
   }, [tweets, query, filter, mediaTypeFilter, sort]);
 
+  useEffect(() => {
+    setPage(1);
+  }, [query, filter, mediaTypeFilter, sort, pageSize]);
+
+  const pageCount = Math.max(1, Math.ceil(visibleTweets.length / pageSize));
+  const pagedTweets = visibleTweets.slice((page - 1) * pageSize, page * pageSize);
+
   const mediaTypeCounts = useMemo(() => ['photo', 'video', 'animated_gif'].reduce((counts, type) => {
     counts[type] = tweets.reduce((total, tweet) => total + (tweet.media.some((media) => media.type === type) ? 1 : 0), 0);
     return counts;
@@ -201,8 +220,9 @@ function App() {
     <main>
       {tweets.length === 0 ? <section className="empty"><div className="empty-icon">✦</div><h2>Your archive, reconstructed locally.</h2><p>Open the <code>bookmarks.db</code> file created by the downloader, then optionally link its <code>media/</code> folder for previews.</p><div className="empty-actions"><button className="button" onClick={chooseDatabase}>Choose bookmarks.db</button><button className="button secondary" onClick={() => mediaInput.current?.click()}>Choose media folder</button></div><p className="privacy">Nothing is uploaded. The database is parsed in this browser tab.</p></section> : <>
         <section className="library-head"><div><p className="eyebrow">YOUR ARCHIVE</p><h2>{visibleTweets.length.toLocaleString()} <span>bookmarks</span></h2><p className="status">{status}</p></div><div className="stats"><span><b>{tweets.filter((tweet) => tweet.media.length).length.toLocaleString()}</b> with media</span><span><b>{tweets.filter((tweet) => tweet.rating > 0).length.toLocaleString()}</b> rated</span></div></section>
-        <section className="controls"><label className="search"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search bookmarks, authors, or text" /></label><div className="filter-tabs"><button className={filter === 'all' ? 'active' : ''} onClick={() => setFilter('all')}>All</button><button className={filter === 'media' ? 'active' : ''} onClick={() => setFilter('media')}>With media</button><button className={filter === 'rated' ? 'active' : ''} onClick={() => setFilter('rated')}>Rated</button></div><select value={mediaTypeFilter} onChange={(event) => setMediaTypeFilter(event.target.value)}><option value="all">Any media type</option>{['photo', 'video', 'animated_gif'].map((type) => <option key={type} value={type}>{mediaTypeLabel(type)} ({mediaTypeCounts[type]})</option>)}</select><select value={sort} onChange={(event) => setSort(event.target.value)}><option value="newest">Newest first</option><option value="oldest">Oldest first</option></select></section>
-        <section className="grid">{visibleTweets.map((tweet) => <LibraryCard key={tweet.id} tweet={tweet} mediaFiles={mediaFiles} onOpen={setSelected} />)}</section>
+        <section className="controls"><label className="search"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search bookmarks, authors, or text" /></label><div className="filter-tabs"><button className={filter === 'all' ? 'active' : ''} onClick={() => setFilter('all')}>All</button><button className={filter === 'media' ? 'active' : ''} onClick={() => setFilter('media')}>With media</button><button className={filter === 'rated' ? 'active' : ''} onClick={() => setFilter('rated')}>Rated</button></div><select value={mediaTypeFilter} onChange={(event) => setMediaTypeFilter(event.target.value)}><option value="all">Any media type</option>{['photo', 'video', 'animated_gif'].map((type) => <option key={type} value={type}>{mediaTypeLabel(type)} ({mediaTypeCounts[type]})</option>)}</select><select value={sort} onChange={(event) => setSort(event.target.value)}><option value="newest">Newest first</option><option value="oldest">Oldest first</option></select><label className="page-size">Show <select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}><option value="12">12</option><option value="24">24</option><option value="48">48</option><option value="96">96</option></select> per page</label></section>
+        <section className="grid">{pagedTweets.map((tweet) => <LibraryCard key={tweet.id} tweet={tweet} mediaFiles={mediaFiles} onOpen={setSelected} />)}</section>
+        <nav className="pagination" aria-label="Pagination"><button className="button secondary" disabled={page === 1} onClick={() => setPage((current) => current - 1)}>Previous</button><span>Page {page} of {pageCount}</span><button className="button secondary" disabled={page >= pageCount} onClick={() => setPage((current) => current + 1)}>Next</button></nav>
       </>}
     </main>
     {selected && <div className="modal-backdrop" onClick={() => setSelected(null)}><div className="modal" onClick={(event) => event.stopPropagation()}><button className="close" onClick={() => setSelected(null)}>×</button><div className="modal-meta"><strong>{selected.name}</strong><span>@{selected.screenName}</span><time>{formatDate(selected.createdAt)}</time></div><p className="modal-text">{selected.text}</p><div className="tag-editor"><div className="tag-list">{selected.tags.map((tag) => <button key={tag} type="button" onClick={() => saveTags(selected, selected.tags.filter((item) => item !== tag))}>#{tag} ×</button>)}</div><form onSubmit={(event) => { event.preventDefault(); if (tagDraft.trim()) { saveTags(selected, [...selected.tags, tagDraft]); setTagDraft(''); } }}><input value={tagDraft} onChange={(event) => setTagDraft(event.target.value)} placeholder="Add a tag" /><button className="button secondary" type="submit">Add</button></form></div>{selected.media.length > 0 && <div className="modal-media">{selected.media.map((media) => <MediaPreview key={media.id} media={media} mediaFiles={mediaFiles} />)}</div>}<a className="permalink" href={selected.url} target="_blank" rel="noreferrer">Open original post ↗</a></div></div>}
