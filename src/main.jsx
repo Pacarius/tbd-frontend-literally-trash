@@ -6,6 +6,15 @@ import './styles.css';
 
 const MEDIA_EXTENSIONS = /\.(avif|gif|jpe?g|png|webp|mp4|webm|mov)$/i;
 
+function isVideoMedia(media, file) {
+  return media.type === 'video' || media.type === 'animated_gif' || Boolean(file && /\.(mp4|webm|mov)$/i.test(file.name));
+}
+
+function mediaTypeLabel(type) {
+  if (type === 'animated_gif') return 'GIFs';
+  return type === 'video' ? 'Videos' : 'Photos';
+}
+
 function formatDate(value) {
   if (!value) return 'Unknown date';
   const date = new Date(value);
@@ -44,7 +53,7 @@ function MediaPreview({ media, mediaFiles }) {
   const file = mediaFiles.get(media.filename);
   if (!file) return <div className="media-missing"><span>{media.type === 'video' ? '▶' : '◇'}</span><small>{media.filename || media.type}</small></div>;
   const src = URL.createObjectURL(file);
-  if (media.type === 'video' || /\.(mp4|webm|mov)$/i.test(file.name)) return <video src={src} muted preload="metadata" />;
+  if (isVideoMedia(media, file)) return <video src={src} muted preload="metadata" controls playsInline onClick={(event) => event.stopPropagation()} />;
   return <img src={src} alt="" />;
 }
 
@@ -53,6 +62,7 @@ function App() {
   const [mediaFiles, setMediaFiles] = useState(new Map());
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState('all');
+  const [mediaTypeFilter, setMediaTypeFilter] = useState('all');
   const [sort, setSort] = useState('newest');
   const [selected, setSelected] = useState(null);
   const [status, setStatus] = useState('Choose your database to begin.');
@@ -109,16 +119,22 @@ function App() {
     return tweets.filter((tweet) => {
       const matchesQuery = !normalized || `${tweet.text} ${tweet.name} ${tweet.screenName}`.toLowerCase().includes(normalized);
       const matchesFilter = filter === 'all' || (filter === 'media' && tweet.media.length > 0) || (filter === 'unrated' && tweet.rating === 0) || (filter === 'rated' && tweet.rating > 0);
-      return matchesQuery && matchesFilter;
+      const matchesMediaType = mediaTypeFilter === 'all' || tweet.media.some((media) => media.type === mediaTypeFilter);
+      return matchesQuery && matchesFilter && matchesMediaType;
     }).sort((a, b) => sort === 'oldest' ? new Date(a.createdAt) - new Date(b.createdAt) : new Date(b.createdAt) - new Date(a.createdAt));
-  }, [tweets, query, filter, sort]);
+  }, [tweets, query, filter, mediaTypeFilter, sort]);
+
+  const mediaTypeCounts = useMemo(() => ['photo', 'video', 'animated_gif'].reduce((counts, type) => {
+    counts[type] = tweets.reduce((total, tweet) => total + (tweet.media.some((media) => media.type === type) ? 1 : 0), 0);
+    return counts;
+  }, {}), [tweets]);
 
   return <div className="app-shell">
     <header className="topbar"><div className="brand"><div className="brand-mark">✦</div><div><h1>Bookmark Library</h1><p>Local archive · private by default</p></div></div><div className="actions"><button className="button secondary" onClick={() => dbInput.current?.click()}>Open database</button><button className="button" onClick={() => mediaInput.current?.click()}>Link media folder</button><input ref={dbInput} type="file" accept=".db,.sqlite,.sqlite3" hidden onChange={(event) => loadDatabase(event.target.files?.[0])} /><input ref={mediaInput} type="file" webkitdirectory="true" multiple hidden onChange={(event) => loadMedia(event.target.files)} /></div></header>
     <main>
       {tweets.length === 0 ? <section className="empty"><div className="empty-icon">✦</div><h2>Your archive, reconstructed locally.</h2><p>Open the <code>bookmarks.db</code> file created by the downloader, then optionally link its <code>media/</code> folder for previews.</p><div className="empty-actions"><button className="button" onClick={() => dbInput.current?.click()}>Choose bookmarks.db</button><button className="button secondary" onClick={() => mediaInput.current?.click()}>Choose media folder</button></div><p className="privacy">Nothing is uploaded. The database is parsed in this browser tab.</p></section> : <>
         <section className="library-head"><div><p className="eyebrow">YOUR ARCHIVE</p><h2>{visibleTweets.length.toLocaleString()} <span>bookmarks</span></h2><p className="status">{status}</p></div><div className="stats"><span><b>{tweets.filter((tweet) => tweet.media.length).length.toLocaleString()}</b> with media</span><span><b>{tweets.filter((tweet) => tweet.rating > 0).length.toLocaleString()}</b> rated</span></div></section>
-        <section className="controls"><label className="search"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search bookmarks, authors, or text" /></label><div className="filter-tabs"><button className={filter === 'all' ? 'active' : ''} onClick={() => setFilter('all')}>All</button><button className={filter === 'media' ? 'active' : ''} onClick={() => setFilter('media')}>With media</button><button className={filter === 'rated' ? 'active' : ''} onClick={() => setFilter('rated')}>Rated</button></div><select value={sort} onChange={(event) => setSort(event.target.value)}><option value="newest">Newest first</option><option value="oldest">Oldest first</option></select></section>
+        <section className="controls"><label className="search"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search bookmarks, authors, or text" /></label><div className="filter-tabs"><button className={filter === 'all' ? 'active' : ''} onClick={() => setFilter('all')}>All</button><button className={filter === 'media' ? 'active' : ''} onClick={() => setFilter('media')}>With media</button><button className={filter === 'rated' ? 'active' : ''} onClick={() => setFilter('rated')}>Rated</button></div><select value={mediaTypeFilter} onChange={(event) => setMediaTypeFilter(event.target.value)}><option value="all">Any media type</option>{['photo', 'video', 'animated_gif'].map((type) => <option key={type} value={type}>{mediaTypeLabel(type)} ({mediaTypeCounts[type]})</option>)}</select><select value={sort} onChange={(event) => setSort(event.target.value)}><option value="newest">Newest first</option><option value="oldest">Oldest first</option></select></section>
         <section className="grid">{visibleTweets.map((tweet) => <LibraryCard key={tweet.id} tweet={tweet} mediaFiles={mediaFiles} onOpen={setSelected} />)}</section>
       </>}
     </main>
