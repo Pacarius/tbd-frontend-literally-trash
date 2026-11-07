@@ -43,8 +43,8 @@ function LibraryCard({ tweet, mediaFiles, onOpen }) {
       {tweet.media.slice(0, 4).map((media) => <MediaPreview key={media.id} media={media} mediaFiles={mediaFiles} />)}
       {tweet.media.length > 4 && <span className="media-more">+{tweet.media.length - 4}</span>}
     </div>}
-    <div className="card-body">
-      <div className="author-line"><strong>{tweet.name}</strong><span>@{tweet.screenName || 'unknown'}</span><time>{formatDate(tweet.createdAt)}</time></div>
+    <div className="card-body" role="button" tabIndex="0" onClick={() => onOpen(tweet)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') onOpen(tweet); }}>
+      <div className="author-line"><span className="avatar">{(tweet.name || '?').slice(0, 1).toUpperCase()}</span><strong>{tweet.name}</strong><span>@{tweet.screenName || 'unknown'}</span><time>{formatDate(tweet.createdAt)}</time></div>
       <p>{tweet.text || 'No text captured.'}</p>
       {tweet.tags.length > 0 && <div className="tag-list">{tweet.tags.map((tag) => <span key={tag}>#{tag}</span>)}</div>}
       <div className="card-footer"><span>{tweet.media.length ? `${tweet.media.length} attachment${tweet.media.length === 1 ? '' : 's'}` : 'Text only'}</span>{tweet.rating > 0 && <span className="rating">{'★'.repeat(tweet.rating)}</span>}</div>
