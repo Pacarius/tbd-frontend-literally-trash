@@ -55,6 +55,8 @@ function LibraryCard({ tweet, mediaFiles, onOpen }) {
 function MediaPreview({ media, mediaFiles }) {
   const file = mediaFiles.get(media.filename);
   const [src, setSrc] = useState('');
+  const videoRef = useRef(null);
+  const mediaFrameRef = useRef(null);
   useEffect(() => {
     if (!file) {
       setSrc('');
@@ -64,10 +66,20 @@ function MediaPreview({ media, mediaFiles }) {
     setSrc(objectUrl);
     return () => URL.revokeObjectURL(objectUrl);
   }, [file]);
+  useEffect(() => {
+    const frame = mediaFrameRef.current;
+    const video = videoRef.current;
+    if (!frame || !video || !isVideoMedia(media, file)) return undefined;
+    const observer = new IntersectionObserver(([entry]) => {
+      if (!entry.isIntersecting) video.pause();
+    }, { threshold: 0.1 });
+    observer.observe(frame);
+    return () => observer.disconnect();
+  }, [file, media, src]);
   if (!file) return <div className="media-frame media-missing"><span>{media.type === 'video' ? '▶' : '◇'}</span><small>{media.filename || media.type}</small></div>;
   if (!src) return <div className="media-frame media-missing"><span>◇</span></div>;
-  if (isVideoMedia(media, file)) return <div className="media-frame video-frame" onClick={(event) => event.stopPropagation()}><video src={src} muted preload="metadata" controls playsInline /></div>;
-  return <div className="media-frame"><img src={src} alt="" /></div>;
+  if (isVideoMedia(media, file)) return <div ref={mediaFrameRef} className="media-frame video-frame" onClick={(event) => event.stopPropagation()}><video ref={videoRef} src={src} muted preload="metadata" controls playsInline /></div>;
+  return <div ref={mediaFrameRef} className="media-frame"><img src={src} alt="" /></div>;
 }
 
 function App() {
