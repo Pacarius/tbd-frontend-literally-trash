@@ -5,6 +5,37 @@ import sqlWasmUrl from 'sql.js/dist/sql-wasm.wasm?url';
 import './styles.css';
 
 const MEDIA_EXTENSIONS = /\.(avif|gif|jpe?g|png|webp|mp4|webm|mov)$/i;
+const HANDLE_STORE = 'bookmark-library-handles';
+
+async function saveHandle(key, handle) {
+  if (!handle || !window.indexedDB) return;
+  await new Promise((resolve, reject) => {
+    const request = indexedDB.open(HANDLE_STORE, 1);
+    request.onupgradeneeded = () => request.result.createObjectStore('handles');
+    request.onsuccess = () => {
+      const transaction = request.result.transaction('handles', 'readwrite');
+      transaction.objectStore('handles').put(handle, key);
+      transaction.oncomplete = resolve;
+      transaction.onerror = () => reject(transaction.error);
+    };
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function readHandle(key) {
+  if (!window.indexedDB) return null;
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(HANDLE_STORE, 1);
+    request.onupgradeneeded = () => request.result.createObjectStore('handles');
+    request.onsuccess = () => {
+      const transaction = request.result.transaction('handles', 'readonly');
+      const get = transaction.objectStore('handles').get(key);
+      get.onsuccess = () => resolve(get.result || null);
+      get.onerror = () => reject(get.error);
+    };
+    request.onerror = () => reject(request.error);
+  });
+}
 
 function isVideoMedia(media, file) {
   return media.type === 'video' || Boolean(file && /\.(mp4|webm|mov)$/i.test(file.name));
@@ -101,6 +132,7 @@ function App() {
   const mediaInput = useRef(null);
   const databaseRef = useRef(null);
   const databaseHandleRef = useRef(null);
+  const mediaDirectoryHandleRef = useRef(null);
   const tagInputRef = useRef(null);
 
   const releaseDatabase = () => {
@@ -136,6 +168,7 @@ function App() {
       const db = new SQL.Database(new Uint8Array(await file.arrayBuffer()));
       databaseRef.current = db;
       setDatabaseName(file.name);
+      setStatus(`${file.name} loaded. Reading bookmarks…`);
       const tables = db.exec("SELECT name FROM sqlite_master WHERE type='table'")[0]?.values.flat() || [];
       if (!tables.includes('tweets')) throw new Error('This file does not contain a tweets table.');
       const tweetColumns = db.exec('PRAGMA table_info(tweets)')[0]?.values.map((row) => row[1]) || [];
@@ -182,6 +215,7 @@ function App() {
           return;
         }
         databaseHandleRef.current = handle;
+        await saveHandle('database', handle);
         await loadDatabase(await handle.getFile());
         return;
       } catch (error) {
@@ -191,6 +225,26 @@ function App() {
       }
     }
     dbInput.current?.click();
+  };
+
+  const chooseMediaDirectory = async () => {
+    if (window.showDirectoryPicker) {
+      try {
+        const handle = await window.showDirectoryPicker();
+        mediaDirectoryHandleRef.current = handle;
+        await saveHandle('media-directory', handle);
+        const files = [];
+        for await (const entry of handle.values()) {
+          if (entry.kind === 'file' && MEDIA_EXTENSIONS.test(entry.name)) files.push(await entry.getFile());
+        }
+        loadMedia(files);
+        return;
+      } catch (error) {
+        if (error.name !== 'AbortError') setStatus(`Could not open media folder: ${error.message}`);
+        return;
+      }
+    }
+    mediaInput.current?.click();
   };
 
   const saveTags = async (tweet, tags) => {
@@ -252,6 +306,32 @@ function App() {
     setStatus(`${tweets.length.toLocaleString()} bookmarks loaded · ${map.size.toLocaleString()} local media files linked.`);
   };
 
+  useEffect(() => {
+    let cancelled = false;
+    const restoreLastFiles = async () => {
+      try {
+        const databaseHandle = await readHandle('database');
+        if (!cancelled && databaseHandle && (await databaseHandle.queryPermission({ mode: 'read' })) === 'granted') {
+          databaseHandleRef.current = databaseHandle;
+          await loadDatabase(await databaseHandle.getFile());
+        }
+        const mediaHandle = await readHandle('media-directory');
+        if (!cancelled && mediaHandle && (await mediaHandle.queryPermission({ mode: 'read' })) === 'granted') {
+          mediaDirectoryHandleRef.current = mediaHandle;
+          const files = [];
+          for await (const entry of mediaHandle.values()) {
+            if (entry.kind === 'file' && MEDIA_EXTENSIONS.test(entry.name)) files.push(await entry.getFile());
+          }
+          if (!cancelled) loadMedia(files);
+        }
+      } catch {
+        if (!cancelled) setStatus('Choose your database to begin.');
+      }
+    };
+    restoreLastFiles();
+    return () => { cancelled = true; };
+  }, []);
+
   const visibleTweets = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     return tweets.filter((tweet) => {
@@ -280,9 +360,9 @@ function App() {
   }, {}), [tweets]);
 
   return <div className="app-shell">
-    <header className="topbar"><div className="brand"><div className="brand-mark">✦</div><div><h1>Bookmark Library</h1><p>Local archive · private by default</p></div></div><div className="actions"><button className="button secondary" onClick={chooseDatabase}>Open database</button>{tweets.length > 0 && <><button className="button secondary" onClick={downloadDatabase}>Download tagged database</button><button className="button secondary" onClick={closeDatabase}>Close database</button></>}<button className="button" onClick={() => mediaInput.current?.click()}>Link media folder</button><input ref={dbInput} type="file" accept=".db,.sqlite,.sqlite3" hidden onChange={(event) => loadDatabase(event.target.files?.[0])} /><input ref={mediaInput} type="file" webkitdirectory="true" multiple hidden onChange={(event) => loadMedia(event.target.files)} /></div></header>
+    <header className="topbar"><div className="brand"><div className="brand-mark">✦</div><div><h1>Bookmark Library</h1><p>Local archive · private by default</p></div></div><div className="actions"><button className="button secondary" onClick={chooseDatabase}>Open database</button>{tweets.length > 0 && <><button className="button secondary" onClick={downloadDatabase}>Download tagged database</button><button className="button secondary" onClick={closeDatabase}>Close database</button></>}<button className="button" onClick={chooseMediaDirectory}>Link media folder</button><input ref={dbInput} type="file" accept=".db,.sqlite,.sqlite3" hidden onChange={(event) => loadDatabase(event.target.files?.[0])} /><input ref={mediaInput} type="file" webkitdirectory="true" multiple hidden onChange={(event) => loadMedia(event.target.files)} /></div></header>
     <main>
-      {tweets.length === 0 ? <section className="empty"><div className="empty-icon">✦</div><h2>Your archive, reconstructed locally.</h2><p>Open the <code>bookmarks.db</code> file created by the downloader, then optionally link its <code>media/</code> folder for previews.</p><div className="empty-actions"><button className="button" onClick={chooseDatabase}>Choose bookmarks.db</button><button className="button secondary" onClick={() => mediaInput.current?.click()}>Choose media folder</button></div><p className="privacy">Nothing is uploaded. The database is parsed in this browser tab.</p></section> : <>
+      {tweets.length === 0 ? <section className="empty"><div className="empty-icon">✦</div><h2>Your archive, reconstructed locally.</h2><p>Open the <code>bookmarks.db</code> file created by the downloader, then optionally link its <code>media/</code> folder for previews.</p><div className="empty-actions"><button className="button" onClick={chooseDatabase}>Choose bookmarks.db</button><button className="button secondary" onClick={chooseMediaDirectory}>Choose media folder</button></div><p className="privacy">Nothing is uploaded. The database is parsed in this browser tab.</p></section> : <>
         <section className="library-head"><div><p className="eyebrow">YOUR ARCHIVE</p><h2>{visibleTweets.length.toLocaleString()} <span>bookmarks</span></h2><p className="status">{status}</p></div><div className="stats"><span><b>{tweets.filter((tweet) => tweet.media.length).length.toLocaleString()}</b> with media</span><span><b>{tweets.filter((tweet) => tweet.rating > 0).length.toLocaleString()}</b> rated</span></div></section>
         <section className="controls"><label className="search"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search bookmarks, authors, or text" /></label><select value={tagFilter} onChange={(event) => setTagFilter(event.target.value)}><option value="all">All tags</option>{Object.entries(tagCounts).sort(([a], [b]) => a.localeCompare(b)).map(([tag, count]) => <option key={tag} value={tag}>#{tag} ({count})</option>)}</select><select value={mediaTypeFilter} onChange={(event) => setMediaTypeFilter(event.target.value)}><option value="all">Any media type</option>{['photo', 'video', 'animated_gif'].map((type) => <option key={type} value={type}>{mediaTypeLabel(type)} ({mediaTypeCounts[type]})</option>)}</select><select value={sort} onChange={(event) => setSort(event.target.value)}><option value="newest">Newest first</option><option value="oldest">Oldest first</option></select><label className="page-size">Show <select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}><option value="12">12</option><option value="24">24</option><option value="48">48</option><option value="96">96</option></select> per page</label></section>
         <section className="grid">{pagedTweets.map((tweet) => <div key={tweet.id} onContextMenu={(event) => { event.preventDefault(); setContextMenu({ tweet, x: event.clientX, y: event.clientY }); }}><LibraryCard tweet={tweet} mediaFiles={mediaFiles} onOpen={setSelected} /></div>)}</section>

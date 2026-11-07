@@ -21,6 +21,24 @@ The database is parsed and edited in the browser with SQLite/WASM. Nothing is
 uploaded and the downloader does not need to be running. The app supports both
 the downloader's legacy GORM schema and its current Ent schema.
 
+The last database and media folder are cached in the browser. On the next
+launch, the app attempts to reopen them when the browser still grants access.
+
+## Desktop app
+
+The project includes an Electron wrapper so the library can run as one desktop
+application without starting Vite manually:
+
+```bash
+npm run electron
+```
+
+To create an installable package for the current platform:
+
+```bash
+npm run package
+```
+
 ## Production build
 
 ```bash

@@ -3,11 +3,15 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "prepreview": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "electron": "npm run build && electron .",
+    "electron:dev": "concurrently -k \"vite\" \"wait-on http://localhost:5173 && electron . --dev\"",
+    "package": "npm run build && electron-builder"
   },
   "dependencies": {
     "@vitejs/plugin-react": "latest",
@@ -16,5 +20,16 @@
     "react": "latest",
     "react-dom": "latest"
   },
-  "devDependencies": {}
+  "devDependencies": {
+    "concurrently": "latest",
+    "electron": "latest",
+    "electron-builder": "latest",
+    "wait-on": "latest"
+  },
+  "build": {
+    "appId": "local.bookmark.library",
+    "productName": "Bookmark Library",
+    "files": ["dist/**/*", "electron/**/*", "package.json"],
+    "directories": { "output": "release" }
+  }
 }
