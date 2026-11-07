@@ -125,6 +125,7 @@ function App() {
   const [mediaFiles, setMediaFiles] = useState(new Map());
   const [classifications, setClassifications] = useState(new Map());
   const [classifying, setClassifying] = useState(false);
+  const [useGpu, setUseGpu] = useState(false);
   const [query, setQuery] = useState('');
   const [tagFilter, setTagFilter] = useState('all');
   const [mediaTypeFilter, setMediaTypeFilter] = useState('all');
@@ -226,6 +227,15 @@ function App() {
         });
       }
       setTweets(parsed);
+      const hasClassificationTable = db.exec("SELECT name FROM sqlite_master WHERE type='table' AND name='image_classifications'")[0];
+      const savedClassifications = hasClassificationTable ? db.exec("SELECT filename, category, source_label, score, model, classified_at FROM image_classifications")[0] : null;
+      if (savedClassifications) {
+        setClassifications(new Map(savedClassifications.values.map((row) => [row[0], {
+          category: row[1], source: row[2], score: Number(row[3]), model: row[4], classifiedAt: row[5],
+        }])));
+      } else {
+        setClassifications(new Map());
+      }
       setStatus(`${parsed.length.toLocaleString()} bookmarks loaded from ${file.name}.`);
     } catch (error) {
       setStatus(`Could not open database: ${error.message}`);
@@ -346,9 +356,19 @@ function App() {
     setStatus('Loading local image safety model…');
     try {
       const [{ load }, tf] = await Promise.all([import('nsfwjs'), import('@tensorflow/tfjs')]);
+      const backend = useGpu && tf.findBackend('webgl') ? 'webgl' : 'cpu';
+      await tf.setBackend(backend);
       await tf.ready();
+      databaseRef.current?.run(`CREATE TABLE IF NOT EXISTS image_classifications (
+        filename TEXT PRIMARY KEY,
+        category TEXT NOT NULL,
+        source_label TEXT NOT NULL,
+        score REAL NOT NULL,
+        model TEXT NOT NULL,
+        classified_at TEXT NOT NULL
+      )`);
       const model = await load('MobileNetV2');
-      const results = new Map();
+      const results = new Map(classifications);
       for (let index = 0; index < images.length; index += 1) {
         const [filename, file] = images[index];
         const objectUrl = URL.createObjectURL(file);
@@ -361,14 +381,20 @@ function App() {
           });
           const predictions = await model.classify(image);
           const top = predictions.sort((a, b) => b.probability - a.probability)[0];
-          results.set(filename, { category: classificationLabel({ className: top.className }), score: top.probability, source: top.className });
+          const result = { category: classificationLabel({ className: top.className }), score: top.probability, source: top.className, model: `NSFWJS MobileNetV2 (${backend})`, classifiedAt: new Date().toISOString() };
+          results.set(filename, result);
+          databaseRef.current?.run(
+            'INSERT OR REPLACE INTO image_classifications (filename, category, source_label, score, model, classified_at) VALUES (?, ?, ?, ?, ?, ?)',
+            [filename, result.category, result.source, result.score, result.model, result.classifiedAt],
+          );
         } finally {
           URL.revokeObjectURL(objectUrl);
         }
+        await new Promise((resolve) => setTimeout(resolve, 0));
         setStatus(`Classifying local images… ${index + 1}/${images.length}`);
       }
       setClassifications(results);
-      setStatus(`Classified ${images.length.toLocaleString()} local images. Results stay in this app only.`);
+      setStatus(`Classified ${images.length.toLocaleString()} local images using ${backend}. Results saved to the database.`);
     } catch (error) {
       setStatus(`Could not load the local image model: ${error.message}`);
     } finally {
@@ -441,7 +467,7 @@ function App() {
   }, {}), [tweets]);
 
   return <div className="app-shell">
-    <header className="topbar"><div className="brand"><div className="brand-mark">✦</div><div><h1>Bookmark Library</h1><p>Local archive · private by default</p></div></div><div className="actions"><button className="button secondary" onClick={chooseDatabase}>Open database</button>{tweets.length > 0 && <><button className="button secondary" onClick={downloadDatabase}>Download tagged database</button><button className="button secondary" onClick={closeDatabase}>Close database</button></>}<button className="button secondary" disabled={classifying || mediaFiles.size === 0} onClick={classifyImages}>{classifying ? 'Classifying…' : 'Classify images'}</button><button className="button" onClick={chooseMediaDirectory}>Link media folder</button><input ref={dbInput} type="file" accept=".db,.sqlite,.sqlite3" hidden onChange={(event) => loadDatabase(event.target.files?.[0])} /><input ref={mediaInput} type="file" webkitdirectory="true" multiple hidden onChange={(event) => loadMedia(event.target.files)} /></div></header>
+    <header className="topbar"><div className="brand"><div className="brand-mark">✦</div><div><h1>Bookmark Library</h1><p>Local archive · private by default</p></div></div><div className="actions"><button className="button secondary" onClick={chooseDatabase}>Open database</button>{tweets.length > 0 && <><button className="button secondary" onClick={downloadDatabase}>Download tagged database</button><button className="button secondary" onClick={closeDatabase}>Close database</button></>}<label className="gpu-toggle"><input type="checkbox" checked={useGpu} onChange={(event) => setUseGpu(event.target.checked)} /> GPU</label><button className="button secondary" disabled={classifying || mediaFiles.size === 0} onClick={classifyImages}>{classifying ? 'Classifying…' : 'Classify images'}</button><button className="button" onClick={chooseMediaDirectory}>Link media folder</button><input ref={dbInput} type="file" accept=".db,.sqlite,.sqlite3" hidden onChange={(event) => loadDatabase(event.target.files?.[0])} /><input ref={mediaInput} type="file" webkitdirectory="true" multiple hidden onChange={(event) => loadMedia(event.target.files)} /></div></header>
     <main>
       {tweets.length === 0 ? <section className="empty"><div className="empty-icon">✦</div><h2>Your archive, reconstructed locally.</h2><p>Open the <code>bookmarks.db</code> file created by the downloader, then choose its <code>media/</code> directory for previews.</p><div className="empty-actions"><button className="button" onClick={chooseDatabase}>Choose bookmarks.db</button><button className="button secondary" onClick={chooseMediaDirectory}>Choose media folder</button>{hasCachedFiles && <button className="button secondary" onClick={() => restoreLastFiles(true)}>Restore last files</button>}</div><p className="privacy">Nothing is uploaded. The database is parsed in this browser tab.</p></section> : <>
         <section className="library-head"><div><p className="eyebrow">YOUR ARCHIVE</p><h2>{visibleTweets.length.toLocaleString()} <span>bookmarks</span></h2><p className="status">{status}</p></div><div className="stats"><span><b>{tweets.filter((tweet) => tweet.media.length).length.toLocaleString()}</b> with media</span><span><b>{tweets.filter((tweet) => tweet.rating > 0).length.toLocaleString()}</b> rated</span></div></section>

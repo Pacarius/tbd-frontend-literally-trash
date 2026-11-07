@@ -30,8 +30,11 @@ silently on startup.
 **Classify images** runs the bundled NSFWJS MobileNet model locally against
 linked images. It labels the top result as Safe, Sensitive, or NSFW and never
 uploads image data. Classification is opt-in; videos are skipped because this
-small model is image-only. Results are session-only and are not written into
-the database.
+small model is image-only. Results are written to an
+`image_classifications` table in the opened SQLite database. Use the **GPU**
+toggle to request TensorFlow.js WebGL acceleration; leave it off for the
+lower-impact CPU path if GPU/WebGL causes instability. Classification yields
+between images to keep the UI responsive.
 
 ## Desktop app
 
