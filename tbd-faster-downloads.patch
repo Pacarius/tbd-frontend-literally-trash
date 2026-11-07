@@ -1,0 +1,229 @@
+diff --git a/config.go b/config.go
+index 34a56eb..2e67150 100644
+--- a/config.go
++++ b/config.go
+@@ -3,6 +3,7 @@ package main
+ import (
+ 	"os"
+ 	"runtime/debug"
++	"strconv"
+ 	"strings"
+ )
+ 
+@@ -13,14 +14,16 @@ type Config struct {
+ 	// default, which is the whole point: what to do with newly downloaded
+ 	// media is a local matter, so the project ships the trigger and not the
+ 	// destination.
+-	OnIdleCmd string
++	OnIdleCmd       string
++	DownloadWorkers int
+ }
+ 
+ var isReleaseBuild bool
+ 
+ var config Config = Config{
+-	MediaDir:  "media",
+-	OnIdleCmd: os.Getenv("TBD_ON_IDLE_CMD"),
++	MediaDir:        "media",
++	OnIdleCmd:       os.Getenv("TBD_ON_IDLE_CMD"),
++	DownloadWorkers: 6,
+ }
+ 
+ func init() {
+@@ -33,4 +36,7 @@ func init() {
+ 			}
+ 		}
+ 	}
++	if value, err := strconv.Atoi(os.Getenv("TBD_DOWNLOAD_WORKERS")); err == nil && value > 0 {
++		config.DownloadWorkers = value
++	}
+ }
+diff --git a/worker.go b/worker.go
+index 073b9c7..1e3fa4a 100644
+--- a/worker.go
++++ b/worker.go
+@@ -9,6 +9,7 @@ import (
+ 	"os/exec"
+ 	"path"
+ 	"strings"
++	"sync"
+ 	"sync/atomic"
+ 	"time"
+ 
+@@ -134,34 +135,102 @@ func ReportWorkerStatus(force bool) {
+ // rather than an idle queue.
+ func DownloadPendingMedia() (attempted, saved int) {
+ 	var mediaList []MediaModel
+-	// Find up to 5 pending downloads
+-	err := DB.Where("downloaded = ? AND failed = ?", false, false).Limit(5).Find(&mediaList).Error
++	// Include rows marked downloaded so missing local files can be repaired.
++	// The database flag describes a previous successful attempt, not proof that
++	// the file still exists on disk.
++	err := DB.
++		Order("downloaded ASC, id ASC").
++		Limit(25).
++		Find(&mediaList).Error
+ 	if err != nil {
+ 		PrintError(eris.Wrap(err, "Failed to query pending media"))
+ 		return 0, 0
+ 	}
+ 
+-	if len(mediaList) == 0 {
+-		return 0, 0
++	workers := config.DownloadWorkers
++	if workers < 1 {
++		workers = 1
++	}
++	if workers > len(mediaList) {
++		workers = len(mediaList)
+ 	}
+ 
+-	for _, media := range mediaList {
+-		err := processMediaDownload(&media)
+-		if err != nil {
+-			PrintError(eris.Wrapf(err, "Media ID: %s", media.ID))
+-			media.RetryCount++
+-			if media.RetryCount >= 3 {
+-				media.Failed = true
++	jobs := make(chan MediaModel)
++	var wg sync.WaitGroup
++	var mu sync.Mutex
++	for i := 0; i < workers; i++ {
++		wg.Add(1)
++		go func() {
++			defer wg.Done()
++			for media := range jobs {
++				if media.Downloaded || media.Failed {
++					exists, err := mediaFileExists(&media)
++					if err != nil {
++						PrintError(eris.Wrapf(err, "Failed to verify media file for %s", media.ID))
++						continue
++					}
++					if exists {
++						continue
++					}
++					PrintInfoF("Local media missing, re-queuing: %s (failed=%t)", media.ID, media.Failed)
++					media.Downloaded = false
++					media.Failed = false
++					media.RetryCount = 0
++				}
++
++				mu.Lock()
++				attempted++
++				mu.Unlock()
++				err := processMediaDownload(&media)
++				if err != nil {
++					PrintError(eris.Wrapf(err, "Media ID: %s", media.ID))
++					media.RetryCount++
++					if media.RetryCount >= 3 {
++						media.Failed = true
++					}
++				} else {
++					media.Downloaded = true
++					mu.Lock()
++					saved++
++					mu.Unlock()
++				}
++				if err := DB.Save(&media).Error; err != nil {
++					PrintError(eris.Wrapf(err, "Failed to update media status for %s", media.ID))
++				}
+ 			}
+-		} else {
+-			media.Downloaded = true
+-			saved++
+-		}
+-		if err := DB.Save(&media).Error; err != nil {
+-			PrintError(eris.Wrapf(err, "Failed to update media status for %s", media.ID))
+-		}
++		}()
++	}
++	for _, media := range mediaList {
++		jobs <- media
+ 	}
+-	return len(mediaList), saved
++	close(jobs)
++	wg.Wait()
++	return attempted, saved
++}
++
++func mediaFileExists(media *MediaModel) (bool, error) {
++	var tweet TweetModel
++	if err := DB.First(&tweet, "id = ?", media.TweetID).Error; err != nil {
++		return false, eris.Wrap(err, "Tweet not found for media")
++	}
++
++	parsedURL, err := url.Parse(media.URL)
++	if err != nil {
++		return false, err
++	}
++	var mediaCount int64
++	if err := DB.Model(&MediaModel{}).Where("tweet_id = ?", tweet.ID).Count(&mediaCount).Error; err != nil {
++		return false, eris.Wrap(err, "Failed to count tweet media")
++	}
++	filename := buildFilename(&tweet, media.Index, int(mediaCount), parsedURL)
++	info, err := os.Stat(path.Join(config.MediaDir, filename))
++	if err == nil {
++		return !info.IsDir() && info.Size() > 0, nil
++	}
++	if os.IsNotExist(err) {
++		return false, nil
++	}
++	return false, err
+ }
+ 
+ func processMediaDownload(media *MediaModel) error {
+@@ -251,11 +320,12 @@ func downloadFile(urlStr string, outputPath string, modTime time.Time) error {
+ 		}
+ 	}()
+ 
+-	if resp.StatusCode != http.StatusOK {
++	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
+ 		return eris.Errorf("failed to download file, status code: %d", resp.StatusCode)
+ 	}
+ 
+-	out, err := os.Create(outputPath)
++	tempPath := outputPath + ".part"
++	out, err := os.Create(tempPath)
+ 	if err != nil {
+ 		return eris.Wrap(err, "failed to create local file")
+ 	}
+@@ -266,15 +336,22 @@ func downloadFile(urlStr string, outputPath string, modTime time.Time) error {
+ 	closeErr := out.Close()
+ 
+ 	if copyErr != nil {
++		_ = os.Remove(tempPath)
+ 		return eris.Wrap(copyErr, "failed to copy content to local file")
+ 	}
+ 	if closeErr != nil {
++		_ = os.Remove(tempPath)
+ 		return eris.Wrap(closeErr, "failed to close local file")
+ 	}
++	if written == 0 {
++		_ = os.Remove(tempPath)
++		return eris.New("downloaded file was empty")
++	}
+ 
+ 	// Verify download completeness
+-	if resp.ContentLength > 0 {
++	if resp.StatusCode == http.StatusOK && resp.ContentLength > 0 {
+ 		if written != resp.ContentLength {
++			_ = os.Remove(tempPath)
+ 			return eris.Errorf("download incomplete, expected %d bytes, got %d bytes", resp.ContentLength, written)
+ 		}
+ 	} else {
+@@ -282,9 +359,14 @@ func downloadFile(urlStr string, outputPath string, modTime time.Time) error {
+ 	}
+ 
+ 	// Restore strict error check for Chtimes as per legacy code
+-	if err := os.Chtimes(outputPath, time.Now(), modTime); err != nil {
++	if err := os.Chtimes(tempPath, time.Now(), modTime); err != nil {
++		_ = os.Remove(tempPath)
+ 		return eris.Wrap(err, "failed to set modified time")
+ 	}
++	if err := os.Rename(tempPath, outputPath); err != nil {
++		_ = os.Remove(tempPath)
++		return eris.Wrap(err, "failed to finalize downloaded file")
++	}
+ 
+ 	PrintInfoF("  Downloaded: %s", outputPath)
+ 	return nil
