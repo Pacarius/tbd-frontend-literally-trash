@@ -86,7 +86,7 @@ function App() {
   const [tweets, setTweets] = useState([]);
   const [mediaFiles, setMediaFiles] = useState(new Map());
   const [query, setQuery] = useState('');
-  const [filter, setFilter] = useState('all');
+  const [tagFilter, setTagFilter] = useState('all');
   const [mediaTypeFilter, setMediaTypeFilter] = useState('all');
   const [sort, setSort] = useState('newest');
   const [page, setPage] = useState(1);
@@ -256,15 +256,15 @@ function App() {
     const normalized = query.trim().toLowerCase();
     return tweets.filter((tweet) => {
       const matchesQuery = !normalized || `${tweet.text} ${tweet.name} ${tweet.screenName}`.toLowerCase().includes(normalized);
-      const matchesFilter = filter === 'all' || (filter === 'media' && tweet.media.length > 0) || (filter === 'unrated' && tweet.rating === 0) || (filter === 'rated' && tweet.rating > 0);
+      const matchesTag = tagFilter === 'all' || tweet.tags.includes(tagFilter);
       const matchesMediaType = mediaTypeFilter === 'all' || tweet.media.some((media) => media.type === mediaTypeFilter);
-      return matchesQuery && matchesFilter && matchesMediaType;
+      return matchesQuery && matchesTag && matchesMediaType;
     }).sort((a, b) => sort === 'oldest' ? new Date(a.createdAt) - new Date(b.createdAt) : new Date(b.createdAt) - new Date(a.createdAt));
-  }, [tweets, query, filter, mediaTypeFilter, sort]);
+  }, [tweets, query, tagFilter, mediaTypeFilter, sort]);
 
   useEffect(() => {
     setPage(1);
-  }, [query, filter, mediaTypeFilter, sort, pageSize]);
+  }, [query, tagFilter, mediaTypeFilter, sort, pageSize]);
 
   const pageCount = Math.max(1, Math.ceil(visibleTweets.length / pageSize));
   const pagedTweets = visibleTweets.slice((page - 1) * pageSize, page * pageSize);
@@ -274,12 +274,17 @@ function App() {
     return counts;
   }, {}), [tweets]);
 
+  const tagCounts = useMemo(() => tweets.reduce((counts, tweet) => {
+    tweet.tags.forEach((tag) => { counts[tag] = (counts[tag] || 0) + 1; });
+    return counts;
+  }, {}), [tweets]);
+
   return <div className="app-shell">
     <header className="topbar"><div className="brand"><div className="brand-mark">✦</div><div><h1>Bookmark Library</h1><p>Local archive · private by default</p></div></div><div className="actions"><button className="button secondary" onClick={chooseDatabase}>Open database</button>{tweets.length > 0 && <><button className="button secondary" onClick={downloadDatabase}>Download tagged database</button><button className="button secondary" onClick={closeDatabase}>Close database</button></>}<button className="button" onClick={() => mediaInput.current?.click()}>Link media folder</button><input ref={dbInput} type="file" accept=".db,.sqlite,.sqlite3" hidden onChange={(event) => loadDatabase(event.target.files?.[0])} /><input ref={mediaInput} type="file" webkitdirectory="true" multiple hidden onChange={(event) => loadMedia(event.target.files)} /></div></header>
     <main>
       {tweets.length === 0 ? <section className="empty"><div className="empty-icon">✦</div><h2>Your archive, reconstructed locally.</h2><p>Open the <code>bookmarks.db</code> file created by the downloader, then optionally link its <code>media/</code> folder for previews.</p><div className="empty-actions"><button className="button" onClick={chooseDatabase}>Choose bookmarks.db</button><button className="button secondary" onClick={() => mediaInput.current?.click()}>Choose media folder</button></div><p className="privacy">Nothing is uploaded. The database is parsed in this browser tab.</p></section> : <>
         <section className="library-head"><div><p className="eyebrow">YOUR ARCHIVE</p><h2>{visibleTweets.length.toLocaleString()} <span>bookmarks</span></h2><p className="status">{status}</p></div><div className="stats"><span><b>{tweets.filter((tweet) => tweet.media.length).length.toLocaleString()}</b> with media</span><span><b>{tweets.filter((tweet) => tweet.rating > 0).length.toLocaleString()}</b> rated</span></div></section>
-        <section className="controls"><label className="search"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search bookmarks, authors, or text" /></label><div className="filter-tabs"><button className={filter === 'all' ? 'active' : ''} onClick={() => setFilter('all')}>All</button><button className={filter === 'media' ? 'active' : ''} onClick={() => setFilter('media')}>With media</button><button className={filter === 'rated' ? 'active' : ''} onClick={() => setFilter('rated')}>Rated</button></div><select value={mediaTypeFilter} onChange={(event) => setMediaTypeFilter(event.target.value)}><option value="all">Any media type</option>{['photo', 'video', 'animated_gif'].map((type) => <option key={type} value={type}>{mediaTypeLabel(type)} ({mediaTypeCounts[type]})</option>)}</select><select value={sort} onChange={(event) => setSort(event.target.value)}><option value="newest">Newest first</option><option value="oldest">Oldest first</option></select><label className="page-size">Show <select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}><option value="12">12</option><option value="24">24</option><option value="48">48</option><option value="96">96</option></select> per page</label></section>
+        <section className="controls"><label className="search"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search bookmarks, authors, or text" /></label><select value={tagFilter} onChange={(event) => setTagFilter(event.target.value)}><option value="all">All tags</option>{Object.entries(tagCounts).sort(([a], [b]) => a.localeCompare(b)).map(([tag, count]) => <option key={tag} value={tag}>#{tag} ({count})</option>)}</select><select value={mediaTypeFilter} onChange={(event) => setMediaTypeFilter(event.target.value)}><option value="all">Any media type</option>{['photo', 'video', 'animated_gif'].map((type) => <option key={type} value={type}>{mediaTypeLabel(type)} ({mediaTypeCounts[type]})</option>)}</select><select value={sort} onChange={(event) => setSort(event.target.value)}><option value="newest">Newest first</option><option value="oldest">Oldest first</option></select><label className="page-size">Show <select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}><option value="12">12</option><option value="24">24</option><option value="48">48</option><option value="96">96</option></select> per page</label></section>
         <section className="grid">{pagedTweets.map((tweet) => <div key={tweet.id} onContextMenu={(event) => { event.preventDefault(); setContextMenu({ tweet, x: event.clientX, y: event.clientY }); }}><LibraryCard tweet={tweet} mediaFiles={mediaFiles} onOpen={setSelected} /></div>)}</section>
         <nav className="pagination" aria-label="Pagination"><button className="button secondary" disabled={page === 1} onClick={() => setPage((current) => current - 1)}>Previous</button><span>Page {page} of {pageCount}</span><button className="button secondary" disabled={page >= pageCount} onClick={() => setPage((current) => current + 1)}>Next</button></nav>
       </>}
