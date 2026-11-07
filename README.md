@@ -36,6 +36,16 @@ toggle to request TensorFlow.js WebGL acceleration; leave it off for the
 lower-impact CPU path if GPU/WebGL causes instability. Classification yields
 between images to keep the UI responsive.
 
+## Downloader duplicate-skip patch
+
+`tbd-duplicate-skip.patch` updates the original `sync-bookmarks.user.js` so
+duplicate-limit responses no longer stop normal scrolling. Apply it from the
+original downloader checkout:
+
+```bash
+git apply tbd-duplicate-skip.patch
+```
+
 ## Desktop app
 
 The project includes an Electron wrapper so the library can run as one desktop

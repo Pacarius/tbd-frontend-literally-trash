@@ -1,0 +1,47 @@
+diff --git a/sync-bookmarks.user.js b/sync-bookmarks.user.js
+index e211a09..de331ff 100644
+--- a/sync-bookmarks.user.js
++++ b/sync-bookmarks.user.js
+@@ -1,7 +1,7 @@
+ // ==UserScript==
+ // @name         Twitter Bookmarks Sync to Local
+ // @namespace    http://tampermonkey.net/
+-// @version      0.3
++// @version      0.4
+ // @description  Intercept XHR to sync bookmarks, with auto-scroll and unattended periodic sync.
+ // @author       Gemini
+ // @match        https://x.com/*
+@@ -210,11 +210,9 @@
+     },
+   }
+ 
+-  // The only thing that ever stops a scroll is the backend saying it has seen
+-  // enough duplicates, so an unreachable backend means that signal never comes.
+-  // Unattended that would scroll on indefinitely, several requests a minute
+-  // against x.com under the user's own account, which is precisely the traffic
+-  // pattern worth not producing. Counting consecutive failures bounds it.
++  // Duplicate bookmarks are expected while paginating an archive. They are
++  // skipped by the backend and do not end the scroll; an unreachable backend
++  // or a rate-limited response still uses the failure budget below.
+   // No cap is placed on a run that is succeeding: the backend still reporting
+   // new tweets means the scroll is doing real work, and cutting that off would
+   // truncate a legitimate backfill. State resets on reload, so recovering is
+@@ -313,13 +311,11 @@
+                 const res = JSON.parse(response.responseText)
+                 if (res.duplicate_limit_reached) {
+                   SyncFailures.reset()
+-                  if (!UI.isForceMode()) {
+-                    Scroller.stop()
+-                    UI.updateStatus('LIMIT REACHED', '#ff0033')
+-                  } else {
+-                    // Silent continuation in Force Mode
+-                    console.log(`[TBD] Limit hit (Force). Saved: ${res.saved_count}`)
+-                  }
++                  UI.updateStatus(`DUPES SKIPPED:${res.saved_count}`, '#ff9f00')
++                  console.log(`[TBD] Duplicate streak skipped. Saved: ${res.saved_count}`)
++                  // Duplicate rows are not a terminal condition: the next
++                  // page may contain older bookmarks that are not in the DB.
++                  Scroller.start()
+                 } else if (res.saved_count > 0) {
+                   SyncFailures.reset()
+                   UI.updateStatus(`SAVED:${res.saved_count}`, '#0f0')
