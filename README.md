@@ -27,6 +27,12 @@ If the browser requires a gesture before restoring access, use **Restore last
 files**; this is required by browser file-permission rules and cannot be done
 silently on startup.
 
+**Classify images** runs the bundled NSFWJS MobileNet model locally against
+linked images. It labels the top result as Safe, Sensitive, or NSFW and never
+uploads image data. Classification is opt-in; videos are skipped because this
+small model is image-only. Results are session-only and are not written into
+the database.
+
 ## Desktop app
 
 The project includes an Electron wrapper so the library can run as one desktop

@@ -27,6 +27,7 @@
 .viewer-toolbar{position:fixed;top:18px;right:22px;z-index:31;display:flex;align-items:center;gap:8px;padding:7px;border:1px solid #4a4d56;border-radius:9px;background:#1c1e23;box-shadow:0 8px 25px #0008}
 .viewer-toolbar button{width:32px;height:30px;border:0;border-radius:5px;background:#2c2f35;color:#fff;cursor:pointer;font-size:18px}
 .viewer-toolbar button:hover{background:#3a3e45}.viewer-toolbar span{min-width:52px;text-align:center;color:#bbb;font:11px 'DM Mono'}
+.classification{position:absolute;left:8px;bottom:8px;padding:5px 7px;border-radius:5px;background:#101114dd;color:#fff;font:10px 'DM Mono'}.classification-safe{color:#d4ff58}.classification-sensitive{color:#ffd166}.classification-nsfw{color:#ff7b8a}
 .grid{grid-template-columns:minmax(0,760px)}
 .card-body{padding:18px 22px 22px}
 .card-body p{font-size:15px;line-height:1.6;-webkit-line-clamp:8}

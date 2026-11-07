@@ -14,11 +14,14 @@
     "package": "npm run build && electron-builder"
   },
   "dependencies": {
+    "@tensorflow-models/mobilenet": "^2.1.1",
+    "@tensorflow/tfjs": "^4.22.0",
     "@vitejs/plugin-react": "latest",
-    "sql.js": "latest",
-    "vite": "latest",
+    "nsfwjs": "^4.3.0",
     "react": "latest",
-    "react-dom": "latest"
+    "react-dom": "latest",
+    "sql.js": "latest",
+    "vite": "latest"
   },
   "devDependencies": {
     "concurrently": "latest",
@@ -29,7 +32,13 @@
   "build": {
     "appId": "local.bookmark.library",
     "productName": "Bookmark Library",
-    "files": ["dist/**/*", "electron/**/*", "package.json"],
-    "directories": { "output": "release" }
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "release"
+    }
   }
 }
