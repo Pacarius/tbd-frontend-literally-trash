@@ -13,3 +13,9 @@
 .author-line span{font-size:12px}
 .avatar{display:grid;place-items:center;width:30px;height:30px;flex:0 0 30px;border-radius:50%;background:#30352b;color:var(--accent)!important;font-weight:700;font-size:12px!important}
 .media-grid{height:clamp(170px,42vw,420px);max-height:420px}
+.media-frame{width:100%;height:100%;min-width:0;min-height:0;overflow:hidden;border:1px solid #3b3e46;border-radius:10px;background:#0d0e10;position:relative}
+.media-frame img,.media-frame video{display:block;width:100%;height:100%;object-fit:cover}
+.video-frame video{cursor:pointer}
+.media-missing{display:grid;place-items:center;color:#686a72}
+.modal-media .media-frame{height:200px}
+.modal-media .media-frame video{object-fit:contain;background:#0d0e10}

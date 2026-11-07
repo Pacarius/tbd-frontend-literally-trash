@@ -7,7 +7,7 @@ import './styles.css';
 const MEDIA_EXTENSIONS = /\.(avif|gif|jpe?g|png|webp|mp4|webm|mov)$/i;
 
 function isVideoMedia(media, file) {
-  return media.type === 'video' || media.type === 'animated_gif' || Boolean(file && /\.(mp4|webm|mov)$/i.test(file.name));
+  return media.type === 'video' || Boolean(file && /\.(mp4|webm|mov)$/i.test(file.name));
 }
 
 function mediaTypeLabel(type) {
@@ -64,10 +64,10 @@ function MediaPreview({ media, mediaFiles }) {
     setSrc(objectUrl);
     return () => URL.revokeObjectURL(objectUrl);
   }, [file]);
-  if (!file) return <div className="media-missing"><span>{media.type === 'video' ? '▶' : '◇'}</span><small>{media.filename || media.type}</small></div>;
-  if (!src) return <div className="media-missing"><span>◇</span></div>;
-  if (isVideoMedia(media, file)) return <video src={src} muted preload="metadata" controls playsInline onClick={(event) => event.stopPropagation()} />;
-  return <img src={src} alt="" />;
+  if (!file) return <div className="media-frame media-missing"><span>{media.type === 'video' ? '▶' : '◇'}</span><small>{media.filename || media.type}</small></div>;
+  if (!src) return <div className="media-frame media-missing"><span>◇</span></div>;
+  if (isVideoMedia(media, file)) return <div className="media-frame video-frame" onClick={(event) => event.stopPropagation()}><video src={src} muted preload="metadata" controls playsInline /></div>;
+  return <div className="media-frame"><img src={src} alt="" /></div>;
 }
 
 function App() {
