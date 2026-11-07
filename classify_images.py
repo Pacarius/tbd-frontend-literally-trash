@@ -86,13 +86,14 @@ def main() -> None:
         raise SystemExit("Unsupported database schema: expected tweets and media columns are missing")
 
     position_column = "position" if "position" in media_columns else "index"
+    quoted_position_column = f'"{position_column}"'
     rows = connection.execute(
         f"""
         SELECT t.id AS tweet_id, t.screen_name, t.created_at,
-               m.id, m.tweet_id, m.url, m.type, m.{position_column} AS position
+               m.id, m.tweet_id, m.url, m.type,                m.{quoted_position_column} AS position
         FROM media m JOIN tweets t ON t.id = m.tweet_id
         WHERE lower(m.type) IN ('photo', 'image')
-        ORDER BY t.created_at DESC, m.{position_column}
+        ORDER BY t.created_at DESC, m.{quoted_position_column}
         """
     ).fetchall()
     counts = {}
