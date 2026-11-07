@@ -27,28 +27,6 @@ If the browser requires a gesture before restoring access, use **Restore last
 files**; this is required by browser file-permission rules and cannot be done
 silently on startup.
 
-The optional `classify_images.py` tool runs a PyTorch image classifier outside
-the browser and writes results to the same `image_classifications` table. It
-accepts the database path directly and uses the sibling `media/` directory by
-default:
-
-```bash
-python -m venv .venv
-. .venv/bin/activate
-python -m pip install -r requirements-classifier.txt
-python classify_images.py /path/to/bookmarks.db --device auto
-```
-
-For AMD ROCm builds of PyTorch, GPU use must be explicit:
-`--device cuda`. The safe default `--device auto` uses CPU because ROCm
-driver faults can crash the desktop instead of raising a Python error. Use
-`--dtype float32` for the safest GPU mode; `--media-dir /path/to/media`
-overrides media discovery, and `--overwrite` reclassifies existing results.
-Images are decoded concurrently, resized into 224x224 RGB inputs, and
-processed in bounded batches; each completed batch is committed to SQLite
-immediately. Tune loading with `--load-workers 4 --batch-size 8`. The browser
-library continues to read the same SQLite results table.
-
 The Electron app can be packaged for Windows from a Windows Node environment:
 
 ```bash
