@@ -81,12 +81,15 @@ function App() {
   const [pageSize, setPageSize] = useState(24);
   const [selected, setSelected] = useState(null);
   const [tagDraft, setTagDraft] = useState('');
+  const [contextMenu, setContextMenu] = useState(null);
+  const [recentTags, setRecentTags] = useState(() => JSON.parse(localStorage.getItem('bookmark-library-recent-tags') || '[]'));
   const [databaseName, setDatabaseName] = useState('bookmarks.db');
   const [status, setStatus] = useState('Choose your database to begin.');
   const dbInput = useRef(null);
   const mediaInput = useRef(null);
   const databaseRef = useRef(null);
   const databaseHandleRef = useRef(null);
+  const tagInputRef = useRef(null);
 
   const releaseDatabase = () => {
     if (databaseRef.current) {
@@ -186,6 +189,9 @@ function App() {
     databaseRef.current.run('UPDATE tweets SET tags = ? WHERE id = ?', [JSON.stringify(cleaned), tweet.id]);
     setTweets((current) => current.map((item) => item.id === tweet.id ? { ...item, tags: cleaned } : item));
     setSelected((current) => current && current.id === tweet.id ? { ...current, tags: cleaned } : current);
+    const updatedRecentTags = [...new Set([...cleaned, ...recentTags])].slice(0, 12);
+    setRecentTags(updatedRecentTags);
+    localStorage.setItem('bookmark-library-recent-tags', JSON.stringify(updatedRecentTags));
     const handle = databaseHandleRef.current;
     if (handle) {
       try {
@@ -202,6 +208,17 @@ function App() {
       }
     }
     setStatus(`Saved tags for ${tweet.name} in memory. Download the updated database to keep them.`);
+  };
+
+  const allTags = useMemo(() => [...new Set(tweets.flatMap((tweet) => tweet.tags))].sort((a, b) => a.localeCompare(b)), [tweets]);
+
+  const openTagEditor = (tweet, event) => {
+    event?.preventDefault();
+    event?.stopPropagation();
+    setContextMenu(null);
+    setSelected(tweet);
+    setTagDraft('');
+    setTimeout(() => tagInputRef.current?.focus(), 0);
   };
 
   const downloadDatabase = () => {
@@ -251,11 +268,12 @@ function App() {
       {tweets.length === 0 ? <section className="empty"><div className="empty-icon">✦</div><h2>Your archive, reconstructed locally.</h2><p>Open the <code>bookmarks.db</code> file created by the downloader, then optionally link its <code>media/</code> folder for previews.</p><div className="empty-actions"><button className="button" onClick={chooseDatabase}>Choose bookmarks.db</button><button className="button secondary" onClick={() => mediaInput.current?.click()}>Choose media folder</button></div><p className="privacy">Nothing is uploaded. The database is parsed in this browser tab.</p></section> : <>
         <section className="library-head"><div><p className="eyebrow">YOUR ARCHIVE</p><h2>{visibleTweets.length.toLocaleString()} <span>bookmarks</span></h2><p className="status">{status}</p></div><div className="stats"><span><b>{tweets.filter((tweet) => tweet.media.length).length.toLocaleString()}</b> with media</span><span><b>{tweets.filter((tweet) => tweet.rating > 0).length.toLocaleString()}</b> rated</span></div></section>
         <section className="controls"><label className="search"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search bookmarks, authors, or text" /></label><div className="filter-tabs"><button className={filter === 'all' ? 'active' : ''} onClick={() => setFilter('all')}>All</button><button className={filter === 'media' ? 'active' : ''} onClick={() => setFilter('media')}>With media</button><button className={filter === 'rated' ? 'active' : ''} onClick={() => setFilter('rated')}>Rated</button></div><select value={mediaTypeFilter} onChange={(event) => setMediaTypeFilter(event.target.value)}><option value="all">Any media type</option>{['photo', 'video', 'animated_gif'].map((type) => <option key={type} value={type}>{mediaTypeLabel(type)} ({mediaTypeCounts[type]})</option>)}</select><select value={sort} onChange={(event) => setSort(event.target.value)}><option value="newest">Newest first</option><option value="oldest">Oldest first</option></select><label className="page-size">Show <select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}><option value="12">12</option><option value="24">24</option><option value="48">48</option><option value="96">96</option></select> per page</label></section>
-        <section className="grid">{pagedTweets.map((tweet) => <LibraryCard key={tweet.id} tweet={tweet} mediaFiles={mediaFiles} onOpen={setSelected} />)}</section>
+        <section className="grid">{pagedTweets.map((tweet) => <div key={tweet.id} onContextMenu={(event) => { event.preventDefault(); setContextMenu({ tweet, x: event.clientX, y: event.clientY }); }}><LibraryCard tweet={tweet} mediaFiles={mediaFiles} onOpen={setSelected} /></div>)}</section>
         <nav className="pagination" aria-label="Pagination"><button className="button secondary" disabled={page === 1} onClick={() => setPage((current) => current - 1)}>Previous</button><span>Page {page} of {pageCount}</span><button className="button secondary" disabled={page >= pageCount} onClick={() => setPage((current) => current + 1)}>Next</button></nav>
       </>}
     </main>
-    {selected && <div className="modal-backdrop" onClick={() => setSelected(null)}><div className="modal" onClick={(event) => event.stopPropagation()}><button className="close" onClick={() => setSelected(null)}>×</button><div className="modal-meta"><strong>{selected.name}</strong><span>@{selected.screenName}</span><time>{formatDate(selected.createdAt)}</time></div><p className="modal-text">{selected.text}</p><div className="tag-editor"><div className="tag-list">{selected.tags.map((tag) => <button key={tag} type="button" onClick={() => saveTags(selected, selected.tags.filter((item) => item !== tag))}>#{tag} ×</button>)}</div><form onSubmit={(event) => { event.preventDefault(); if (tagDraft.trim()) { saveTags(selected, [...selected.tags, tagDraft]); setTagDraft(''); } }}><input value={tagDraft} onChange={(event) => setTagDraft(event.target.value)} placeholder="Add a tag" /><button className="button secondary" type="submit">Add</button></form></div>{selected.media.length > 0 && <div className="modal-media">{selected.media.map((media) => <MediaPreview key={media.id} media={media} mediaFiles={mediaFiles} />)}</div>}<a className="permalink" href={selected.url} target="_blank" rel="noreferrer">Open original post ↗</a></div></div>}
+    {contextMenu && <><div className="context-dismiss" onClick={() => setContextMenu(null)} /><div className="context-menu" style={{ left: Math.min(contextMenu.x, window.innerWidth - 190), top: Math.min(contextMenu.y, window.innerHeight - 70) }}><button onClick={() => openTagEditor(contextMenu.tweet)}>＋ Add/edit tags</button></div></>}
+    {selected && <div className="modal-backdrop" onClick={() => setSelected(null)}><div className="modal" onClick={(event) => event.stopPropagation()}><button className="close" onClick={() => setSelected(null)}>×</button><div className="modal-meta"><strong>{selected.name}</strong><span>@{selected.screenName}</span><time>{formatDate(selected.createdAt)}</time></div><p className="modal-text">{selected.text}</p><div className="tag-editor"><div className="tag-list">{selected.tags.map((tag) => <button key={tag} type="button" onClick={() => saveTags(selected, selected.tags.filter((item) => item !== tag))}>#{tag} ×</button>)}</div><div className="recent-tags"><small>Recent tags</small>{recentTags.map((tag) => <button key={tag} type="button" onClick={() => saveTags(selected, [...selected.tags, tag])} disabled={selected.tags.includes(tag)}>#{tag}</button>)}</div><form onSubmit={(event) => { event.preventDefault(); if (tagDraft.trim()) { saveTags(selected, [...selected.tags, tagDraft]); setTagDraft(''); } }}><input ref={tagInputRef} list="existing-tags" value={tagDraft} onChange={(event) => setTagDraft(event.target.value)} placeholder="Add a tag" /><datalist id="existing-tags">{allTags.map((tag) => <option key={tag} value={tag} />)}</datalist><button className="button secondary" type="submit">Add</button></form></div>{selected.media.length > 0 && <div className="modal-media">{selected.media.map((media) => <MediaPreview key={media.id} media={media} mediaFiles={mediaFiles} />)}</div>}<a className="permalink" href={selected.url} target="_blank" rel="noreferrer">Open original post ↗</a></div></div>}
   </div>;
 }
 
