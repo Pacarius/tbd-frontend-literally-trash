@@ -6,6 +6,8 @@ import './styles.css';
 
 const MEDIA_EXTENSIONS = /\.(avif|gif|jpe?g|png|webp|mp4|webm|mov)$/i;
 const HANDLE_STORE = 'bookmark-library-handles';
+const AudioContextClass = typeof window !== 'undefined' ? (window.AudioContext || window.webkitAudioContext) : null;
+const audioContext = AudioContextClass ? new AudioContextClass() : null;
 
 async function saveHandle(key, handle) {
   if (!handle || !window.indexedDB) return;
@@ -82,10 +84,10 @@ function normalizeTweet(row) {
   };
 }
 
-function LibraryCard({ tweet, mediaFiles, onOpen, onImageOpen, classifications, volume }) {
+function LibraryCard({ tweet, mediaFiles, onOpen, onImageOpen, classifications, volume, normalizeVolume }) {
   return <article className="card" onClick={() => onOpen(tweet)}>
     {tweet.media.length > 0 && <div className={`media-grid media-${Math.min(tweet.media.length, 4)}`}>
-      {tweet.media.slice(0, 4).map((media) => <MediaPreview key={media.id} media={media} mediaFiles={mediaFiles} onImageOpen={onImageOpen} classification={classifications.get(media.filename)} volume={volume} />)}
+      {tweet.media.slice(0, 4).map((media) => <MediaPreview key={media.id} media={media} mediaFiles={mediaFiles} onImageOpen={onImageOpen} classification={classifications.get(media.filename)} volume={volume} normalizeVolume={normalizeVolume} />)}
       {tweet.media.length > 4 && <span className="media-more">+{tweet.media.length - 4}</span>}
     </div>}
     <div className="card-body" role="button" tabIndex="0" onClick={() => onOpen(tweet)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') onOpen(tweet); }}>
@@ -97,11 +99,12 @@ function LibraryCard({ tweet, mediaFiles, onOpen, onImageOpen, classifications, 
   </article>;
 }
 
-function MediaPreview({ media, mediaFiles, onImageOpen, classification, volume = 0.7 }) {
+function MediaPreview({ media, mediaFiles, onImageOpen, classification, volume = 0.7, normalizeVolume = true }) {
   const file = mediaFiles.get(media.filename);
   const [src, setSrc] = useState('');
   const videoRef = useRef(null);
   const mediaFrameRef = useRef(null);
+  const audioNodesRef = useRef(null);
   useEffect(() => {
     if (!file) {
       setSrc('');
@@ -124,6 +127,50 @@ function MediaPreview({ media, mediaFiles, onImageOpen, classification, volume =
   useEffect(() => {
     if (videoRef.current) videoRef.current.volume = volume;
   }, [volume]);
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !audioContext || !isVideoMedia(media, file)) return undefined;
+    try {
+      if (!audioNodesRef.current) {
+        const source = audioContext.createMediaElementSource(video);
+        const compressor = audioContext.createDynamicsCompressor();
+        const makeupGain = audioContext.createGain();
+        compressor.threshold.value = -24;
+        compressor.knee.value = 30;
+        compressor.ratio.value = 8;
+        compressor.attack.value = 0.003;
+        compressor.release.value = 0.25;
+        makeupGain.gain.value = 1.5;
+        source.connect(compressor);
+        compressor.connect(makeupGain);
+        makeupGain.connect(audioContext.destination);
+        audioNodesRef.current = { source, compressor, makeupGain };
+      }
+      const { source, compressor, makeupGain } = audioNodesRef.current;
+      source.disconnect();
+      compressor.disconnect();
+      makeupGain.disconnect();
+      if (normalizeVolume) {
+        source.connect(compressor);
+        compressor.connect(makeupGain);
+        makeupGain.connect(audioContext.destination);
+      } else {
+        source.connect(audioContext.destination);
+      }
+      const resumeAudio = () => {
+        if (audioContext.state === 'suspended') audioContext.resume();
+      };
+      video.addEventListener('play', resumeAudio);
+      return () => {
+        video.removeEventListener('play', resumeAudio);
+        source.disconnect();
+        compressor.disconnect();
+        makeupGain.disconnect();
+      };
+    } catch {
+      return undefined;
+    }
+  }, [file, media, normalizeVolume, src]);
   if (!file) return <div className="media-frame media-missing"><span>{media.type === 'video' ? '▶' : '◇'}</span><small>{media.filename || media.type}</small></div>;
   if (!src) return <div className="media-frame media-missing"><span>◇</span></div>;
   if (isVideoMedia(media, file)) return <div ref={mediaFrameRef} className="media-frame video-frame" onClick={(event) => event.stopPropagation()}><video ref={videoRef} src={src} muted={false} defaultValue={volume} onLoadedMetadata={(event) => { event.currentTarget.volume = volume; }} preload="metadata" controls playsInline /></div>;
@@ -137,6 +184,7 @@ function App() {
   const [classifying, setClassifying] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [volume, setVolume] = useState(() => Number(localStorage.getItem('bookmark-library-volume') ?? 0.7));
+  const [normalizeVolume, setNormalizeVolume] = useState(() => localStorage.getItem('bookmark-library-normalize-volume') !== 'false');
   const [theme, setTheme] = useState(() => localStorage.getItem('bookmark-library-theme') || 'dark');
   const classifyAbortRef = useRef(null);
   const [userQuery, setUserQuery] = useState('');
@@ -164,8 +212,9 @@ function App() {
 
   useEffect(() => {
     localStorage.setItem('bookmark-library-volume', String(volume));
+    localStorage.setItem('bookmark-library-normalize-volume', String(normalizeVolume));
     localStorage.setItem('bookmark-library-theme', theme);
-  }, [volume, theme]);
+  }, [volume, normalizeVolume, theme]);
 
   const releaseDatabase = () => {
     if (databaseRef.current) {
@@ -527,13 +576,13 @@ function App() {
       {tweets.length === 0 ? <section className="empty"><div className="empty-icon">✦</div><h2>Your archive, reconstructed locally.</h2><p>Open the <code>bookmarks.db</code> file created by the downloader, then choose its <code>media/</code> directory for previews.</p><div className="empty-actions"><button className="button" onClick={chooseDatabase}>Choose bookmarks.db</button><button className="button secondary" onClick={chooseMediaDirectory}>Choose media folder</button>{hasCachedFiles && <button className="button secondary" onClick={() => restoreLastFiles(true)}>Restore last files</button>}</div><p className="privacy">Nothing is uploaded. The database is parsed in this browser tab.</p></section> : <>
         <section className="library-head"><div><p className="eyebrow">YOUR ARCHIVE</p><h2>{visibleTweets.length.toLocaleString()} <span>bookmarks</span></h2><p className="status">{status}</p></div><div className="stats"><span><b>{tweets.filter((tweet) => tweet.media.length).length.toLocaleString()}</b> with media</span></div></section>
         <section className="controls"><label className="search user-search"><span>@</span><input list="bookmark-users" value={userQuery} onChange={(event) => setUserQuery(event.target.value)} placeholder="Filter by user" /><datalist id="bookmark-users">{users.map((user) => <option key={user.id} value={user.screenName ? `@${user.screenName}` : user.name}>{user.name}</option>)}</datalist></label><select value={classificationFilter} onChange={(event) => setClassificationFilter(event.target.value)}><option value="all">All classifications</option><option value="safe">Safe</option><option value="sensitive">Sensitive</option><option value="nsfw">NSFW</option><option value="unclassified">Unclassified</option></select><select value={tagFilter} onChange={(event) => setTagFilter(event.target.value)}><option value="all">All tags</option>{Object.entries(tagCounts).sort(([a], [b]) => a.localeCompare(b)).map(([tag, count]) => <option key={tag} value={tag}>#{tag} ({count})</option>)}</select><select value={mediaTypeFilter} onChange={(event) => setMediaTypeFilter(event.target.value)}><option value="all">Any media type</option>{['photo', 'video', 'animated_gif'].map((type) => <option key={type} value={type}>{mediaTypeLabel(type)} ({mediaTypeCounts[type]})</option>)}</select><select value={sort} onChange={(event) => setSort(event.target.value)}><option value="newest">Newest first</option><option value="oldest">Oldest first</option></select><label className="page-size">Show <select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}><option value="12">12</option><option value="24">24</option><option value="48">48</option><option value="96">96</option></select> per page</label></section>
-        <section className="grid">{pagedTweets.map((tweet) => <div key={tweet.id} onContextMenu={(event) => { event.preventDefault(); setContextMenu({ tweet, x: event.clientX, y: event.clientY }); }}><LibraryCard tweet={tweet} mediaFiles={mediaFiles} classifications={classifications} volume={volume} onOpen={setSelected} onImageOpen={openImage} /></div>)}</section>
+        <section className="grid">{pagedTweets.map((tweet) => <div key={tweet.id} onContextMenu={(event) => { event.preventDefault(); setContextMenu({ tweet, x: event.clientX, y: event.clientY }); }}><LibraryCard tweet={tweet} mediaFiles={mediaFiles} classifications={classifications} volume={volume} normalizeVolume={normalizeVolume} onOpen={setSelected} onImageOpen={openImage} /></div>)}</section>
         <nav className="pagination" aria-label="Pagination"><button className="button secondary" disabled={page === 1} onClick={() => goToPage(page - 1)}>Previous</button><label>Page <input className="page-number" type="number" min="1" max={pageCount} value={page} aria-label="Page number" onChange={(event) => goToPage(event.target.value)} /> of {pageCount}</label><button className="button secondary" disabled={page >= pageCount} onClick={() => goToPage(page + 1)}>Next</button></nav>
       </>}
     </main>
     {contextMenu && <><div className="context-dismiss" onClick={() => setContextMenu(null)} /><div className="context-menu" style={{ left: Math.min(contextMenu.x, window.innerWidth - 190), top: Math.min(contextMenu.y, window.innerHeight - 70) }}><button onClick={() => openTagEditor(contextMenu.tweet)}>＋ Add/edit tags</button></div></>}
-    {settingsOpen && <div className="modal-backdrop" onClick={() => setSettingsOpen(false)}><section className="settings-panel" onClick={(event) => event.stopPropagation()}><button className="close" onClick={() => setSettingsOpen(false)}>×</button><h2>Settings</h2><label className="settings-row">Theme<select value={theme} onChange={(event) => setTheme(event.target.value)}><option value="dark">Dark</option><option value="light">Light</option></select></label><label className="settings-row">Video volume<input type="range" min="0" max="1" step="0.05" value={volume} onChange={(event) => setVolume(Number(event.target.value))} /><span>{Math.round(volume * 100)}%</span></label></section></div>}
-    {selected && <div className="modal-backdrop" onClick={() => setSelected(null)}><div className="modal" onClick={(event) => event.stopPropagation()}><button className="close" onClick={() => setSelected(null)}>×</button><div className="modal-meta"><strong>{selected.name}</strong><span>@{selected.screenName}</span><time>{formatDate(selected.createdAt)}</time></div><p className="modal-text">{selected.text}</p><div className="tag-editor"><div className="tag-list">{selected.tags.map((tag) => <button key={tag} type="button" onClick={() => saveTags(selected, selected.tags.filter((item) => item !== tag))}>#{tag} ×</button>)}</div><div className="recent-tags"><small>Recent tags</small>{recentTags.map((tag) => <button key={tag} type="button" onClick={() => saveTags(selected, [...selected.tags, tag])} disabled={selected.tags.includes(tag)}>#{tag}</button>)}</div><form onSubmit={(event) => { event.preventDefault(); if (tagDraft.trim()) { saveTags(selected, [...selected.tags, tagDraft]); setTagDraft(''); } }}><input ref={tagInputRef} list="existing-tags" value={tagDraft} onChange={(event) => setTagDraft(event.target.value)} placeholder="Add a tag" /><datalist id="existing-tags">{allTags.map((tag) => <option key={tag} value={tag} />)}</datalist><button className="button secondary" type="submit">Add</button></form></div>{selected.media.length > 0 && <div className="modal-media">{selected.media.map((media) => <MediaPreview key={media.id} media={media} mediaFiles={mediaFiles} onImageOpen={openImage} classification={classifications.get(media.filename)} volume={volume} />)}</div>}<a className="permalink" href={selected.url} target="_blank" rel="noreferrer">Open original post ↗</a></div></div>}
+    {settingsOpen && <div className="modal-backdrop" onClick={() => setSettingsOpen(false)}><section className="settings-panel" onClick={(event) => event.stopPropagation()}><button className="close" onClick={() => setSettingsOpen(false)}>×</button><h2>Settings</h2><label className="settings-row">Theme<select value={theme} onChange={(event) => setTheme(event.target.value)}><option value="dark">Dark</option><option value="light">Light</option></select></label><label className="settings-row">Video volume<input type="range" min="0" max="1" step="0.05" value={volume} onChange={(event) => setVolume(Number(event.target.value))} /><span>{Math.round(volume * 100)}%</span></label><label className="settings-row"><span>Normalize video volume</span><input type="checkbox" checked={normalizeVolume} onChange={(event) => setNormalizeVolume(event.target.checked)} /></label></section></div>}
+    {selected && <div className="modal-backdrop" onClick={() => setSelected(null)}><div className="modal" onClick={(event) => event.stopPropagation()}><button className="close" onClick={() => setSelected(null)}>×</button><div className="modal-meta"><strong>{selected.name}</strong><span>@{selected.screenName}</span><time>{formatDate(selected.createdAt)}</time></div><p className="modal-text">{selected.text}</p><div className="tag-editor"><div className="tag-list">{selected.tags.map((tag) => <button key={tag} type="button" onClick={() => saveTags(selected, selected.tags.filter((item) => item !== tag))}>#{tag} ×</button>)}</div><div className="recent-tags"><small>Recent tags</small>{recentTags.map((tag) => <button key={tag} type="button" onClick={() => saveTags(selected, [...selected.tags, tag])} disabled={selected.tags.includes(tag)}>#{tag}</button>)}</div><form onSubmit={(event) => { event.preventDefault(); if (tagDraft.trim()) { saveTags(selected, [...selected.tags, tagDraft]); setTagDraft(''); } }}><input ref={tagInputRef} list="existing-tags" value={tagDraft} onChange={(event) => setTagDraft(event.target.value)} placeholder="Add a tag" /><datalist id="existing-tags">{allTags.map((tag) => <option key={tag} value={tag} />)}</datalist><button className="button secondary" type="submit">Add</button></form></div>{selected.media.length > 0 && <div className="modal-media">{selected.media.map((media) => <MediaPreview key={media.id} media={media} mediaFiles={mediaFiles} onImageOpen={openImage} classification={classifications.get(media.filename)} volume={volume} normalizeVolume={normalizeVolume} />)}</div>}<a className="permalink" href={selected.url} target="_blank" rel="noreferrer">Open original post ↗</a></div></div>}
     {viewer && <div className="image-viewer" onClick={closeViewer}><div className="viewer-toolbar" onClick={(event) => event.stopPropagation()}><button onClick={() => setZoom((value) => Math.max(.5, value - .25))}>−</button><span>{Math.round(zoom * 100)}%</span><button onClick={() => setZoom((value) => Math.min(5, value + .25))}>+</button><button onClick={closeViewer}>×</button></div><img src={viewer.src} alt="" style={{ transform: `scale(${zoom})` }} onWheel={(event) => { event.preventDefault(); setZoom((value) => Math.min(5, Math.max(.5, value + (event.deltaY < 0 ? .25 : -.25)))); }} onClick={(event) => event.stopPropagation()} /></div>}
   </div>;
 }
