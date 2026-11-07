@@ -21,6 +21,12 @@
 .media-missing{display:grid;place-items:center;color:#686a72}
 .modal-media .media-frame{height:200px}
 .modal-media .media-frame video{object-fit:contain;background:#0d0e10}
+.image-frame{cursor:zoom-in}
+.image-viewer{position:fixed;inset:0;z-index:30;display:grid;place-items:center;overflow:auto;background:#050609ee;padding:70px 30px 30px}
+.image-viewer>img{max-width:90vw;max-height:85vh;object-fit:contain;cursor:zoom-out;transition:transform .15s ease;user-select:none}
+.viewer-toolbar{position:fixed;top:18px;right:22px;z-index:31;display:flex;align-items:center;gap:8px;padding:7px;border:1px solid #4a4d56;border-radius:9px;background:#1c1e23;box-shadow:0 8px 25px #0008}
+.viewer-toolbar button{width:32px;height:30px;border:0;border-radius:5px;background:#2c2f35;color:#fff;cursor:pointer;font-size:18px}
+.viewer-toolbar button:hover{background:#3a3e45}.viewer-toolbar span{min-width:52px;text-align:center;color:#bbb;font:11px 'DM Mono'}
 .grid{grid-template-columns:minmax(0,760px)}
 .card-body{padding:18px 22px 22px}
 .card-body p{font-size:15px;line-height:1.6;-webkit-line-clamp:8}
