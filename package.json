@@ -15,10 +15,7 @@
     "package:win": "npm run build && electron-builder --win nsis portable"
   },
   "dependencies": {
-    "@tensorflow-models/mobilenet": "^2.1.1",
-    "@tensorflow/tfjs": "^4.22.0",
     "@vitejs/plugin-react": "latest",
-    "nsfwjs": "^4.3.0",
     "react": "latest",
     "react-dom": "latest",
     "sql.js": "latest",

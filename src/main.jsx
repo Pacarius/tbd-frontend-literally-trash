@@ -48,13 +48,6 @@ function mediaTypeLabel(type) {
   return type === 'video' ? 'Videos' : 'Photos';
 }
 
-function classificationLabel(prediction) {
-  const label = prediction.className.toLowerCase();
-  if (label === 'porn' || label === 'hentai') return 'NSFW';
-  if (label === 'sexy') return 'Sensitive';
-  return 'Safe';
-}
-
 function formatDate(value) {
   if (!value) return 'Unknown date';
   const date = new Date(value);
@@ -84,10 +77,10 @@ function normalizeTweet(row) {
   };
 }
 
-function LibraryCard({ tweet, mediaFiles, onOpen, onImageOpen, classifications, volume, normalizeVolume }) {
+function LibraryCard({ tweet, mediaFiles, onOpen, onImageOpen, volume, normalizeVolume }) {
   return <article className="card" onClick={() => onOpen(tweet)}>
     {tweet.media.length > 0 && <div className={`media-grid media-${Math.min(tweet.media.length, 4)}`}>
-      {tweet.media.slice(0, 4).map((media) => <MediaPreview key={media.id} media={media} mediaFiles={mediaFiles} onImageOpen={onImageOpen} classification={classifications.get(media.filename)} volume={volume} normalizeVolume={normalizeVolume} />)}
+      {tweet.media.slice(0, 4).map((media) => <MediaPreview key={media.id} media={media} mediaFiles={mediaFiles} onImageOpen={onImageOpen} volume={volume} normalizeVolume={normalizeVolume} />)}
       {tweet.media.length > 4 && <span className="media-more">+{tweet.media.length - 4}</span>}
     </div>}
     <div className="card-body" role="button" tabIndex="0" onClick={() => onOpen(tweet)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') onOpen(tweet); }}>
@@ -99,7 +92,7 @@ function LibraryCard({ tweet, mediaFiles, onOpen, onImageOpen, classifications, 
   </article>;
 }
 
-function MediaPreview({ media, mediaFiles, onImageOpen, classification, volume = 0.7, normalizeVolume = true }) {
+function MediaPreview({ media, mediaFiles, onImageOpen, volume = 0.7, normalizeVolume = true }) {
   const file = mediaFiles.get(media.filename);
   const [src, setSrc] = useState('');
   const videoRef = useRef(null);
@@ -174,21 +167,17 @@ function MediaPreview({ media, mediaFiles, onImageOpen, classification, volume =
   if (!file) return <div className="media-frame media-missing"><span>{media.type === 'video' ? '▶' : '◇'}</span><small>{media.filename || media.type}</small></div>;
   if (!src) return <div className="media-frame media-missing"><span>◇</span></div>;
   if (isVideoMedia(media, file)) return <div ref={mediaFrameRef} className="media-frame video-frame" onClick={(event) => event.stopPropagation()}><video ref={videoRef} src={src} muted={false} defaultValue={volume} onLoadedMetadata={(event) => { event.currentTarget.volume = volume; }} preload="metadata" controls playsInline /></div>;
-  return <div ref={mediaFrameRef} className="media-frame image-frame" onClick={(event) => { event.stopPropagation(); onImageOpen?.({ media, src }); }}><img src={src} alt="" />{classification && <span className={`classification classification-${classification.category.toLowerCase()}`}>{classification.category} {Math.round(classification.score * 100)}%</span>}</div>;
+  return <div ref={mediaFrameRef} className="media-frame image-frame" onClick={(event) => { event.stopPropagation(); onImageOpen?.({ media, src }); }}><img src={src} alt="" /></div>;
 }
 
 function App() {
   const [tweets, setTweets] = useState([]);
   const [mediaFiles, setMediaFiles] = useState(new Map());
-  const [classifications, setClassifications] = useState(new Map());
-  const [classifying, setClassifying] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [volume, setVolume] = useState(() => Number(localStorage.getItem('bookmark-library-volume') ?? 0.7));
   const [normalizeVolume, setNormalizeVolume] = useState(() => localStorage.getItem('bookmark-library-normalize-volume') !== 'false');
   const [theme, setTheme] = useState(() => localStorage.getItem('bookmark-library-theme') || 'dark');
-  const classifyAbortRef = useRef(null);
   const [userQuery, setUserQuery] = useState('');
-  const [classificationFilter, setClassificationFilter] = useState('all');
   const [tagFilter, setTagFilter] = useState('all');
   const [mediaTypeFilter, setMediaTypeFilter] = useState('all');
   const [sort, setSort] = useState('newest');
@@ -295,15 +284,6 @@ function App() {
         });
       }
       setTweets(parsed);
-      const hasClassificationTable = db.exec("SELECT name FROM sqlite_master WHERE type='table' AND name='image_classifications'")[0];
-      const savedClassifications = hasClassificationTable ? db.exec("SELECT filename, category, source_label, score, model, classified_at FROM image_classifications")[0] : null;
-      if (savedClassifications) {
-        setClassifications(new Map(savedClassifications.values.map((row) => [row[0], {
-          category: row[1], source: row[2], score: Number(row[3]), model: row[4], classifiedAt: row[5],
-        }])));
-      } else {
-        setClassifications(new Map());
-      }
       setStatus(`${parsed.length.toLocaleString()} bookmarks loaded from ${file.name}.`);
     } catch (error) {
       setStatus(`Could not open database: ${error.message}`);
@@ -414,86 +394,6 @@ function App() {
     setStatus(`${tweets.length.toLocaleString()} bookmarks loaded · ${map.size.toLocaleString()} local media files linked.`);
   };
 
-  const classifyImages = async () => {
-    const images = [...mediaFiles.entries()].filter(([name]) => /\.(avif|gif|jpe?g|png|webp)$/i.test(name));
-    if (!images.length) {
-      setStatus('No local images are linked. Choose the media folder first.');
-      return;
-    }
-    setClassifying(true);
-    classifyAbortRef.current = new AbortController();
-    setStatus('Loading local image safety model…');
-    try {
-      const [{ load }, tf] = await Promise.all([import('nsfwjs'), import('@tensorflow/tfjs')]);
-      // Keep inference off the compositor/GPU. WebGL tensor allocations can
-      // accumulate across a large archive and take the desktop session down.
-      const backend = 'cpu';
-      await tf.setBackend(backend);
-      await tf.ready();
-      databaseRef.current?.run(`CREATE TABLE IF NOT EXISTS image_classifications (
-        filename TEXT PRIMARY KEY,
-        category TEXT NOT NULL,
-        source_label TEXT NOT NULL,
-        score REAL NOT NULL,
-        model TEXT NOT NULL,
-        classified_at TEXT NOT NULL
-      )`);
-      const model = await load('MobileNetV2');
-      const results = new Map(classifications);
-      for (let index = 0; index < images.length; index += 1) {
-        if (classifyAbortRef.current.signal.aborted) break;
-        const [filename, file] = images[index];
-        const objectUrl = URL.createObjectURL(file);
-        const canvas = document.createElement('canvas');
-        canvas.width = 224;
-        canvas.height = 224;
-        try {
-          const image = new Image();
-          image.src = objectUrl;
-          await new Promise((resolve, reject) => {
-            image.onload = resolve;
-            image.onerror = reject;
-          });
-          const context = canvas.getContext('2d', { willReadFrequently: true });
-          context.drawImage(image, 0, 0, 224, 224);
-          tf.engine().startScope();
-          let predictions;
-          try {
-            predictions = await model.classify(canvas);
-          } finally {
-            tf.engine().endScope();
-          }
-          const top = predictions.sort((a, b) => b.probability - a.probability)[0];
-          const result = { category: classificationLabel({ className: top.className }), score: top.probability, source: top.className, model: `NSFWJS MobileNetV2 (${backend})`, classifiedAt: new Date().toISOString() };
-          results.set(filename, result);
-          databaseRef.current?.run(
-            'INSERT OR REPLACE INTO image_classifications (filename, category, source_label, score, model, classified_at) VALUES (?, ?, ?, ?, ?, ?)',
-            [filename, result.category, result.source, result.score, result.model, result.classifiedAt],
-          );
-        } finally {
-          URL.revokeObjectURL(objectUrl);
-          canvas.width = 0;
-          canvas.height = 0;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 50));
-        setStatus(`Classifying local images… ${index + 1}/${images.length}`);
-      }
-      model.dispose?.();
-      setClassifications(results);
-      setStatus(`Classified ${Math.min(images.length, results.size).toLocaleString()} local images using ${backend}. Results saved to the database.`);
-    } catch (error) {
-      setStatus(`Could not load the local image model: ${error.message}`);
-    } finally {
-      classifyAbortRef.current = null;
-      setClassifying(false);
-    }
-  };
-
-  const stopClassification = () => {
-    classifyAbortRef.current?.abort();
-    setStatus('Stopping image classification…');
-  };
-
   const restoreLastFiles = async (requestPermission = false) => {
     try {
       const databaseHandle = await readHandle('database');
@@ -535,22 +435,20 @@ function App() {
     const normalizedUser = userQuery.trim().replace(/^@/, '').toLowerCase();
     return tweets.filter((tweet) => {
       const matchesUser = !normalizedUser || tweet.screenName.toLowerCase().includes(normalizedUser) || tweet.name.toLowerCase().includes(normalizedUser);
-      const tweetClassifications = tweet.media.map((media) => classifications.get(media.filename)?.category.toLowerCase());
-      const matchesClassification = classificationFilter === 'all'
-        || (classificationFilter === 'unclassified' && tweetClassifications.every((category) => !category))
-        || tweetClassifications.includes(classificationFilter);
-      const matchesTag = tagFilter === 'all' || tweet.tags.includes(tagFilter);
+      const matchesTag = tagFilter === 'all'
+        || (tagFilter === 'untagged' && tweet.tags.length === 0)
+        || tweet.tags.includes(tagFilter);
       const matchesMediaType = mediaTypeFilter === 'all' || tweet.media.some((media) => media.type === mediaTypeFilter);
-      return matchesUser && matchesClassification && matchesTag && matchesMediaType;
+      return matchesUser && matchesTag && matchesMediaType;
     }).sort((a, b) => sort === 'oldest' ? new Date(a.createdAt) - new Date(b.createdAt) : new Date(b.createdAt) - new Date(a.createdAt));
-  }, [tweets, classifications, userQuery, classificationFilter, tagFilter, mediaTypeFilter, sort]);
+  }, [tweets, userQuery, tagFilter, mediaTypeFilter, sort]);
 
   const users = useMemo(() => [...new Map(tweets.map((tweet) => [tweet.screenName || tweet.name, tweet])).values()]
     .sort((a, b) => (a.screenName || a.name).localeCompare(b.screenName || b.name)), [tweets]);
 
   useEffect(() => {
     setPage(1);
-  }, [userQuery, classificationFilter, tagFilter, mediaTypeFilter, sort, pageSize]);
+  }, [userQuery, tagFilter, mediaTypeFilter, sort, pageSize]);
 
   const pageCount = Math.max(1, Math.ceil(visibleTweets.length / pageSize));
   const pagedTweets = visibleTweets.slice((page - 1) * pageSize, page * pageSize);
@@ -571,18 +469,18 @@ function App() {
   }, {}), [tweets]);
 
   return <div className={`app-shell theme-${theme}`}>
-    <header className="topbar"><div className="brand"><div className="brand-mark">✦</div><div><h1>Bookmark Library</h1><p>Local archive · private by default</p></div></div><div className="actions"><button className="button secondary" onClick={() => setSettingsOpen(true)}>Settings</button><button className="button secondary" onClick={chooseDatabase}>Open database</button>{tweets.length > 0 && <><button className="button secondary" onClick={downloadDatabase}>Download tagged database</button><button className="button secondary" onClick={closeDatabase}>Close database</button></>}{classifying ? <button className="button secondary" onClick={stopClassification}>Stop classification</button> : <button className="button secondary" disabled={mediaFiles.size === 0} onClick={classifyImages}>Classify images</button>}<button className="button" onClick={chooseMediaDirectory}>Link media folder</button><input ref={dbInput} type="file" accept=".db,.sqlite,.sqlite3" hidden onChange={(event) => loadDatabase(event.target.files?.[0])} /><input ref={mediaInput} type="file" webkitdirectory="true" multiple hidden onChange={(event) => loadMedia(event.target.files)} /></div></header>
+    <header className="topbar"><div className="brand"><div className="brand-mark">✦</div><div><h1>Bookmark Library</h1><p>Local archive · private by default</p></div></div><div className="actions"><button className="button secondary" onClick={() => setSettingsOpen(true)}>Settings</button><button className="button secondary" onClick={chooseDatabase}>Open database</button>{tweets.length > 0 && <><button className="button secondary" onClick={downloadDatabase}>Download tagged database</button><button className="button secondary" onClick={closeDatabase}>Close database</button></>}<button className="button" onClick={chooseMediaDirectory}>Link media folder</button><input ref={dbInput} type="file" accept=".db,.sqlite,.sqlite3" hidden onChange={(event) => loadDatabase(event.target.files?.[0])} /><input ref={mediaInput} type="file" webkitdirectory="true" multiple hidden onChange={(event) => loadMedia(event.target.files)} /></div></header>
     <main>
       {tweets.length === 0 ? <section className="empty"><div className="empty-icon">✦</div><h2>Your archive, reconstructed locally.</h2><p>Open the <code>bookmarks.db</code> file created by the downloader, then choose its <code>media/</code> directory for previews.</p><div className="empty-actions"><button className="button" onClick={chooseDatabase}>Choose bookmarks.db</button><button className="button secondary" onClick={chooseMediaDirectory}>Choose media folder</button>{hasCachedFiles && <button className="button secondary" onClick={() => restoreLastFiles(true)}>Restore last files</button>}</div><p className="privacy">Nothing is uploaded. The database is parsed in this browser tab.</p></section> : <>
         <section className="library-head"><div><p className="eyebrow">YOUR ARCHIVE</p><h2>{visibleTweets.length.toLocaleString()} <span>bookmarks</span></h2><p className="status">{status}</p></div><div className="stats"><span><b>{tweets.filter((tweet) => tweet.media.length).length.toLocaleString()}</b> with media</span></div></section>
-        <section className="controls"><label className="search user-search"><span>@</span><input list="bookmark-users" value={userQuery} onChange={(event) => setUserQuery(event.target.value)} placeholder="Filter by user" /><datalist id="bookmark-users">{users.map((user) => <option key={user.id} value={user.screenName ? `@${user.screenName}` : user.name}>{user.name}</option>)}</datalist></label><select value={classificationFilter} onChange={(event) => setClassificationFilter(event.target.value)}><option value="all">All classifications</option><option value="safe">Safe</option><option value="sensitive">Sensitive</option><option value="nsfw">NSFW</option><option value="unclassified">Unclassified</option></select><select value={tagFilter} onChange={(event) => setTagFilter(event.target.value)}><option value="all">All tags</option>{Object.entries(tagCounts).sort(([a], [b]) => a.localeCompare(b)).map(([tag, count]) => <option key={tag} value={tag}>#{tag} ({count})</option>)}</select><select value={mediaTypeFilter} onChange={(event) => setMediaTypeFilter(event.target.value)}><option value="all">Any media type</option>{['photo', 'video', 'animated_gif'].map((type) => <option key={type} value={type}>{mediaTypeLabel(type)} ({mediaTypeCounts[type]})</option>)}</select><select value={sort} onChange={(event) => setSort(event.target.value)}><option value="newest">Newest first</option><option value="oldest">Oldest first</option></select><label className="page-size">Show <select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}><option value="12">12</option><option value="24">24</option><option value="48">48</option><option value="96">96</option></select> per page</label></section>
-        <section className="grid">{pagedTweets.map((tweet) => <div key={tweet.id} onContextMenu={(event) => { event.preventDefault(); setContextMenu({ tweet, x: event.clientX, y: event.clientY }); }}><LibraryCard tweet={tweet} mediaFiles={mediaFiles} classifications={classifications} volume={volume} normalizeVolume={normalizeVolume} onOpen={setSelected} onImageOpen={openImage} /></div>)}</section>
+        <section className="controls"><label className="search user-search"><span>@</span><input list="bookmark-users" value={userQuery} onChange={(event) => setUserQuery(event.target.value)} placeholder="Filter by user" /><datalist id="bookmark-users">{users.map((user) => <option key={user.id} value={user.screenName ? `@${user.screenName}` : user.name}>{user.name}</option>)}</datalist></label><select value={tagFilter} onChange={(event) => setTagFilter(event.target.value)}><option value="all">All tags</option><option value="untagged">Untagged</option>{Object.entries(tagCounts).sort(([a], [b]) => a.localeCompare(b)).map(([tag, count]) => <option key={tag} value={tag}>#{tag} ({count})</option>)}</select><select value={mediaTypeFilter} onChange={(event) => setMediaTypeFilter(event.target.value)}><option value="all">Any media type</option>{['photo', 'video', 'animated_gif'].map((type) => <option key={type} value={type}>{mediaTypeLabel(type)} ({mediaTypeCounts[type]})</option>)}</select><select value={sort} onChange={(event) => setSort(event.target.value)}><option value="newest">Newest first</option><option value="oldest">Oldest first</option></select><label className="page-size">Show <select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}><option value="12">12</option><option value="24">24</option><option value="48">48</option><option value="96">96</option></select> per page</label></section>
+        <section className="grid">{pagedTweets.map((tweet) => <div key={tweet.id} onContextMenu={(event) => { event.preventDefault(); setContextMenu({ tweet, x: event.clientX, y: event.clientY }); }}><LibraryCard tweet={tweet} mediaFiles={mediaFiles} volume={volume} normalizeVolume={normalizeVolume} onOpen={setSelected} onImageOpen={openImage} /></div>)}</section>
         <nav className="pagination" aria-label="Pagination"><button className="button secondary" disabled={page === 1} onClick={() => goToPage(page - 1)}>Previous</button><label>Page <input className="page-number" type="number" min="1" max={pageCount} value={page} aria-label="Page number" onChange={(event) => goToPage(event.target.value)} /> of {pageCount}</label><button className="button secondary" disabled={page >= pageCount} onClick={() => goToPage(page + 1)}>Next</button></nav>
       </>}
     </main>
     {contextMenu && <><div className="context-dismiss" onClick={() => setContextMenu(null)} /><div className="context-menu" style={{ left: Math.min(contextMenu.x, window.innerWidth - 190), top: Math.min(contextMenu.y, window.innerHeight - 70) }}><button onClick={() => openTagEditor(contextMenu.tweet)}>＋ Add/edit tags</button></div></>}
     {settingsOpen && <div className="modal-backdrop" onClick={() => setSettingsOpen(false)}><section className="settings-panel" onClick={(event) => event.stopPropagation()}><button className="close" onClick={() => setSettingsOpen(false)}>×</button><h2>Settings</h2><label className="settings-row">Theme<select value={theme} onChange={(event) => setTheme(event.target.value)}><option value="dark">Dark</option><option value="light">Light</option></select></label><label className="settings-row">Video volume<input type="range" min="0" max="1" step="0.05" value={volume} onChange={(event) => setVolume(Number(event.target.value))} /><span>{Math.round(volume * 100)}%</span></label><label className="settings-row"><span>Normalize video volume</span><input type="checkbox" checked={normalizeVolume} onChange={(event) => setNormalizeVolume(event.target.checked)} /></label></section></div>}
-    {selected && <div className="modal-backdrop" onClick={() => setSelected(null)}><div className="modal" onClick={(event) => event.stopPropagation()}><button className="close" onClick={() => setSelected(null)}>×</button><div className="modal-meta"><strong>{selected.name}</strong><span>@{selected.screenName}</span><time>{formatDate(selected.createdAt)}</time></div><p className="modal-text">{selected.text}</p><div className="tag-editor"><div className="tag-list">{selected.tags.map((tag) => <button key={tag} type="button" onClick={() => saveTags(selected, selected.tags.filter((item) => item !== tag))}>#{tag} ×</button>)}</div><div className="recent-tags"><small>Recent tags</small>{recentTags.map((tag) => <button key={tag} type="button" onClick={() => saveTags(selected, [...selected.tags, tag])} disabled={selected.tags.includes(tag)}>#{tag}</button>)}</div><form onSubmit={(event) => { event.preventDefault(); if (tagDraft.trim()) { saveTags(selected, [...selected.tags, tagDraft]); setTagDraft(''); } }}><input ref={tagInputRef} list="existing-tags" value={tagDraft} onChange={(event) => setTagDraft(event.target.value)} placeholder="Add a tag" /><datalist id="existing-tags">{allTags.map((tag) => <option key={tag} value={tag} />)}</datalist><button className="button secondary" type="submit">Add</button></form></div>{selected.media.length > 0 && <div className="modal-media">{selected.media.map((media) => <MediaPreview key={media.id} media={media} mediaFiles={mediaFiles} onImageOpen={openImage} classification={classifications.get(media.filename)} volume={volume} normalizeVolume={normalizeVolume} />)}</div>}<a className="permalink" href={selected.url} target="_blank" rel="noreferrer">Open original post ↗</a></div></div>}
+    {selected && <div className="modal-backdrop" onClick={() => setSelected(null)}><div className="modal" onClick={(event) => event.stopPropagation()}><button className="close" onClick={() => setSelected(null)}>×</button><div className="modal-meta"><strong>{selected.name}</strong><span>@{selected.screenName}</span><time>{formatDate(selected.createdAt)}</time></div><p className="modal-text">{selected.text}</p><div className="tag-editor"><div className="tag-list">{selected.tags.map((tag) => <button key={tag} type="button" onClick={() => saveTags(selected, selected.tags.filter((item) => item !== tag))}>#{tag} ×</button>)}</div><div className="recent-tags"><small>Recent tags</small>{recentTags.map((tag) => <button key={tag} type="button" onClick={() => saveTags(selected, [...selected.tags, tag])} disabled={selected.tags.includes(tag)}>#{tag}</button>)}</div><form onSubmit={(event) => { event.preventDefault(); if (tagDraft.trim()) { saveTags(selected, [...selected.tags, tagDraft]); setTagDraft(''); } }}><input ref={tagInputRef} list="existing-tags" value={tagDraft} onChange={(event) => setTagDraft(event.target.value)} placeholder="Add a tag" /><datalist id="existing-tags">{allTags.map((tag) => <option key={tag} value={tag} />)}</datalist><button className="button secondary" type="submit">Add</button></form></div>{selected.media.length > 0 && <div className="modal-media">{selected.media.map((media) => <MediaPreview key={media.id} media={media} mediaFiles={mediaFiles} onImageOpen={openImage} volume={volume} normalizeVolume={normalizeVolume} />)}</div>}<a className="permalink" href={selected.url} target="_blank" rel="noreferrer">Open original post ↗</a></div></div>}
     {viewer && <div className="image-viewer" onClick={closeViewer}><div className="viewer-toolbar" onClick={(event) => event.stopPropagation()}><button onClick={() => setZoom((value) => Math.max(.5, value - .25))}>−</button><span>{Math.round(zoom * 100)}%</span><button onClick={() => setZoom((value) => Math.min(5, value + .25))}>+</button><button onClick={closeViewer}>×</button></div><img src={viewer.src} alt="" style={{ transform: `scale(${zoom})` }} onWheel={(event) => { event.preventDefault(); setZoom((value) => Math.min(5, Math.max(.5, value + (event.deltaY < 0 ? .25 : -.25)))); }} onClick={(event) => event.stopPropagation()} /></div>}
   </div>;
 }
