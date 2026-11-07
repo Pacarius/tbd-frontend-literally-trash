@@ -37,8 +37,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("database", type=Path, help="Path to bookmarks.db")
     parser.add_argument("--media-dir", type=Path, help="Media directory (default: database directory/media)")
-    parser.add_argument("--device", default="auto", choices=("auto", "cuda", "cpu"), help="Inference device")
-    parser.add_argument("--dtype", default="auto", choices=("auto", "float16", "float32"), help="Model precision")
+    parser.add_argument("--device", default="auto", choices=("auto", "cuda", "cpu"), help="Inference device; auto uses CPU for safety")
+    parser.add_argument("--dtype", default="auto", choices=("auto", "float16", "float32"), help="Model precision; auto uses float32")
     parser.add_argument("--batch-size", type=int, default=8, help="Images per inference batch")
     parser.add_argument("--load-workers", type=int, default=4, help="Concurrent image loading/resizing workers")
     parser.add_argument("--model", default="Falconsai/nsfw_image_detection", help="Hugging Face image classifier")
@@ -63,9 +63,11 @@ def main() -> None:
     if args.batch_size < 1 or args.load_workers < 1:
         raise SystemExit("--batch-size and --load-workers must be positive")
 
-    device = 0 if args.device == "cuda" or (args.device == "auto" and torch.cuda.is_available()) else -1
+    # ROCm device faults can take down the desktop compositor instead of
+    # raising a recoverable Python exception. GPU use is therefore opt-in.
+    device = 0 if args.device == "cuda" else -1
     device_name = "cuda" if device == 0 else "cpu"
-    dtype = torch.float16 if args.dtype == "float16" or (args.dtype == "auto" and device == 0) else torch.float32
+    dtype = torch.float16 if args.dtype == "float16" else torch.float32
     dtype_name = "float16" if dtype == torch.float16 else "float32"
     print(f"Using {device_name}/{dtype_name}; torch reports CUDA/ROCm={torch.cuda.is_available()}", flush=True)
 

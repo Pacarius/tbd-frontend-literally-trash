@@ -11,7 +11,8 @@
     "preview": "vite preview",
     "electron": "npm run build && electron .",
     "electron:dev": "concurrently -k \"vite\" \"wait-on http://localhost:5173 && electron . --dev\"",
-    "package": "npm run build && electron-builder"
+    "package": "npm run build && electron-builder",
+    "package:win": "npm run build && electron-builder --win nsis portable"
   },
   "dependencies": {
     "@tensorflow-models/mobilenet": "^2.1.1",
@@ -39,6 +40,18 @@
     ],
     "directories": {
       "output": "release"
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "artifactName": "${productName}-${version}-${os}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true
     }
   }
 }

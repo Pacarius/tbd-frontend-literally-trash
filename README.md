@@ -39,16 +39,23 @@ python -m pip install -r requirements-classifier.txt
 python classify_images.py /path/to/bookmarks.db --device auto
 ```
 
-For AMD ROCm builds of PyTorch, `--device auto` uses the CUDA-compatible ROCm
-device when `torch.cuda.is_available()` is true. Use `--device cpu` to force
-CPU inference, `--media-dir /path/to/media` to override media discovery, and
-`--overwrite` to classify files that already have results. Images are decoded
-concurrently, resized into 224x224 RGB inputs, and processed in bounded
-batches; each completed batch is committed to SQLite immediately. Tune loading
-with `--load-workers 4 --batch-size 8`. The browser library continues to read
-the same SQLite results table. GPU runs default to FP16 to reduce ROCm model
-transfer time and memory; use `--dtype float32` if the GPU does not support
-FP16.
+For AMD ROCm builds of PyTorch, GPU use must be explicit:
+`--device cuda`. The safe default `--device auto` uses CPU because ROCm
+driver faults can crash the desktop instead of raising a Python error. Use
+`--dtype float32` for the safest GPU mode; `--media-dir /path/to/media`
+overrides media discovery, and `--overwrite` reclassifies existing results.
+Images are decoded concurrently, resized into 224x224 RGB inputs, and
+processed in bounded batches; each completed batch is committed to SQLite
+immediately. Tune loading with `--load-workers 4 --batch-size 8`. The browser
+library continues to read the same SQLite results table.
+
+The Electron app can be packaged for Windows from a Windows Node environment:
+
+```bash
+npm run package:win
+```
+
+This produces an NSIS installer and a portable `.exe` under `release/`.
 
 ## Downloader duplicate-skip patch
 
