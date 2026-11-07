@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import initSqlJs from 'sql.js';
+import sqlWasmUrl from 'sql.js/dist/sql-wasm.wasm?url';
 import './styles.css';
 
 const MEDIA_EXTENSIONS = /\.(avif|gif|jpe?g|png|webp|mp4|webm|mov)$/i;
@@ -62,7 +63,7 @@ function App() {
     if (!file) return;
     setStatus('Reading database…');
     try {
-      const SQL = await initSqlJs({ locateFile: (name) => `https://sql.js.org/dist/${name}` });
+      const SQL = await initSqlJs({ locateFile: () => sqlWasmUrl });
       const db = new SQL.Database(new Uint8Array(await file.arrayBuffer()));
       const tables = db.exec("SELECT name FROM sqlite_master WHERE type='table'")[0]?.values.flat() || [];
       if (!tables.includes('tweets')) throw new Error('This file does not contain a tweets table.');
