@@ -1,6 +1,10 @@
 const { app, BrowserWindow } = require('electron');
 const path = require('node:path');
 
+if (process.getuid && process.getuid() === 0) {
+  app.commandLine.appendSwitch('no-sandbox');
+}
+
 function createWindow() {
   const window = new BrowserWindow({
     width: 1440,

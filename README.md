@@ -33,6 +33,11 @@ application without starting Vite manually:
 npm run electron
 ```
 
+On Linux, Electron follows the desktop session (including Wayland when
+available). Running Electron as root is not recommended; this project only
+disables Chromium's sandbox automatically when it detects root so local
+development can still start.
+
 To create an installable package for the current platform:
 
 ```bash
