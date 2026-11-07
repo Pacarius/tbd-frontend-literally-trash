@@ -74,6 +74,7 @@ function App() {
   const dbInput = useRef(null);
   const mediaInput = useRef(null);
   const databaseRef = useRef(null);
+  const databaseHandleRef = useRef(null);
 
   const loadDatabase = async (file) => {
     if (!file) return;
@@ -116,6 +117,25 @@ function App() {
     }
   };
 
+  const chooseDatabase = async () => {
+    if (window.showOpenFilePicker) {
+      try {
+        const [handle] = await window.showOpenFilePicker({
+          multiple: false,
+          types: [{ description: 'SQLite database', accept: { 'application/vnd.sqlite3': ['.db', '.sqlite', '.sqlite3'] } }],
+        });
+        databaseHandleRef.current = handle;
+        await loadDatabase(await handle.getFile());
+        return;
+      } catch (error) {
+        if (error.name === 'AbortError') return;
+        setStatus(`Could not open database: ${error.message}`);
+        return;
+      }
+    }
+    dbInput.current?.click();
+  };
+
   const saveTags = async (tweet, tags) => {
     const cleaned = [...new Map(tags.map((tag) => [tag.trim().toLowerCase(), tag.trim()])).values()].filter(Boolean).slice(0, 30);
     if (!databaseRef.current) return;
@@ -124,6 +144,21 @@ function App() {
     databaseRef.current.run('UPDATE tweets SET tags = ? WHERE id = ?', [JSON.stringify(cleaned), tweet.id]);
     setTweets((current) => current.map((item) => item.id === tweet.id ? { ...item, tags: cleaned } : item));
     setSelected((current) => current && current.id === tweet.id ? { ...current, tags: cleaned } : current);
+    const handle = databaseHandleRef.current;
+    if (handle) {
+      try {
+        const permission = await handle.queryPermission({ mode: 'readwrite' });
+        if (permission !== 'granted' && await handle.requestPermission({ mode: 'readwrite' }) !== 'granted') throw new Error('Write permission was not granted');
+        const writable = await handle.createWritable();
+        await writable.write(databaseRef.current.export());
+        await writable.close();
+        setStatus(`Saved tags for ${tweet.name} directly to ${databaseName}.`);
+        return;
+      } catch (error) {
+        setStatus(`Tags updated, but could not write the database: ${error.message}`);
+        return;
+      }
+    }
     setStatus(`Saved tags for ${tweet.name} in memory. Download the updated database to keep them.`);
   };
 
@@ -162,9 +197,9 @@ function App() {
   }, {}), [tweets]);
 
   return <div className="app-shell">
-    <header className="topbar"><div className="brand"><div className="brand-mark">✦</div><div><h1>Bookmark Library</h1><p>Local archive · private by default</p></div></div><div className="actions"><button className="button secondary" onClick={() => dbInput.current?.click()}>Open database</button>{tweets.length > 0 && <button className="button secondary" onClick={downloadDatabase}>Download tagged database</button>}<button className="button" onClick={() => mediaInput.current?.click()}>Link media folder</button><input ref={dbInput} type="file" accept=".db,.sqlite,.sqlite3" hidden onChange={(event) => loadDatabase(event.target.files?.[0])} /><input ref={mediaInput} type="file" webkitdirectory="true" multiple hidden onChange={(event) => loadMedia(event.target.files)} /></div></header>
+    <header className="topbar"><div className="brand"><div className="brand-mark">✦</div><div><h1>Bookmark Library</h1><p>Local archive · private by default</p></div></div><div className="actions"><button className="button secondary" onClick={chooseDatabase}>Open database</button>{tweets.length > 0 && <button className="button secondary" onClick={downloadDatabase}>Download tagged database</button>}<button className="button" onClick={() => mediaInput.current?.click()}>Link media folder</button><input ref={dbInput} type="file" accept=".db,.sqlite,.sqlite3" hidden onChange={(event) => loadDatabase(event.target.files?.[0])} /><input ref={mediaInput} type="file" webkitdirectory="true" multiple hidden onChange={(event) => loadMedia(event.target.files)} /></div></header>
     <main>
-      {tweets.length === 0 ? <section className="empty"><div className="empty-icon">✦</div><h2>Your archive, reconstructed locally.</h2><p>Open the <code>bookmarks.db</code> file created by the downloader, then optionally link its <code>media/</code> folder for previews.</p><div className="empty-actions"><button className="button" onClick={() => dbInput.current?.click()}>Choose bookmarks.db</button><button className="button secondary" onClick={() => mediaInput.current?.click()}>Choose media folder</button></div><p className="privacy">Nothing is uploaded. The database is parsed in this browser tab.</p></section> : <>
+      {tweets.length === 0 ? <section className="empty"><div className="empty-icon">✦</div><h2>Your archive, reconstructed locally.</h2><p>Open the <code>bookmarks.db</code> file created by the downloader, then optionally link its <code>media/</code> folder for previews.</p><div className="empty-actions"><button className="button" onClick={chooseDatabase}>Choose bookmarks.db</button><button className="button secondary" onClick={() => mediaInput.current?.click()}>Choose media folder</button></div><p className="privacy">Nothing is uploaded. The database is parsed in this browser tab.</p></section> : <>
         <section className="library-head"><div><p className="eyebrow">YOUR ARCHIVE</p><h2>{visibleTweets.length.toLocaleString()} <span>bookmarks</span></h2><p className="status">{status}</p></div><div className="stats"><span><b>{tweets.filter((tweet) => tweet.media.length).length.toLocaleString()}</b> with media</span><span><b>{tweets.filter((tweet) => tweet.rating > 0).length.toLocaleString()}</b> rated</span></div></section>
         <section className="controls"><label className="search"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search bookmarks, authors, or text" /></label><div className="filter-tabs"><button className={filter === 'all' ? 'active' : ''} onClick={() => setFilter('all')}>All</button><button className={filter === 'media' ? 'active' : ''} onClick={() => setFilter('media')}>With media</button><button className={filter === 'rated' ? 'active' : ''} onClick={() => setFilter('rated')}>Rated</button></div><select value={mediaTypeFilter} onChange={(event) => setMediaTypeFilter(event.target.value)}><option value="all">Any media type</option>{['photo', 'video', 'animated_gif'].map((type) => <option key={type} value={type}>{mediaTypeLabel(type)} ({mediaTypeCounts[type]})</option>)}</select><select value={sort} onChange={(event) => setSort(event.target.value)}><option value="newest">Newest first</option><option value="oldest">Oldest first</option></select></section>
         <section className="grid">{visibleTweets.map((tweet) => <LibraryCard key={tweet.id} tweet={tweet} mediaFiles={mediaFiles} onOpen={setSelected} />)}</section>

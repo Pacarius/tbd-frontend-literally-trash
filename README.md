@@ -10,10 +10,10 @@ npm run dev
 ```
 
 Open the local Vite URL, choose the downloader's `bookmarks.db`, then choose
-the `media/` directory if you want local image and video previews. Tags are
-written into the in-memory SQLite copy and can be saved with **Download tagged
-database**. Replace your original database with that downloaded file when you
-want to keep the changes.
+the `media/` directory if you want local image and video previews. In browsers
+with the File System Access API, tag changes are written back to the selected
+database automatically after the browser grants write permission. The
+**Download tagged database** button remains available as a fallback.
 
 The database is parsed and edited in the browser with SQLite/WASM. Nothing is
 uploaded and the downloader does not need to be running. The app supports both
