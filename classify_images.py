@@ -18,7 +18,7 @@ def local_timestamp(value: str) -> str:
 
 def media_filename(tweet: sqlite3.Row, media: sqlite3.Row, count: int) -> str:
     extension = Path(urlparse(media["url"] or "").path).suffix.lower()
-    base = f"twitter-@{tweet['screen_name']}-{local_timestamp(tweet['created_at'])}-{tweet['id']}"
+    base = f"twitter-@{tweet['screen_name']}-{local_timestamp(tweet['created_at'])}-{tweet['tweet_id']}"
     position = media["position"] if "position" in media.keys() and media["position"] is not None else media["index"]
     return f"{base}-{position}{extension}" if count > 1 else f"{base}{extension}"
 
@@ -90,7 +90,8 @@ def main() -> None:
     rows = connection.execute(
         f"""
         SELECT t.id AS tweet_id, t.screen_name, t.created_at,
-               m.id, m.tweet_id, m.url, m.type,                m.{quoted_position_column} AS position
+               t.id AS tweet_id, m.id AS media_id, m.url, m.type,
+               m.{quoted_position_column} AS position
         FROM media m JOIN tweets t ON t.id = m.tweet_id
         WHERE lower(m.type) IN ('photo', 'image')
         ORDER BY t.created_at DESC, m.{quoted_position_column}
