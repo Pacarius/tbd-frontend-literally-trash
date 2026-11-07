@@ -88,10 +88,35 @@ function App() {
   const databaseRef = useRef(null);
   const databaseHandleRef = useRef(null);
 
+  const releaseDatabase = () => {
+    if (databaseRef.current) {
+      databaseRef.current.close();
+      databaseRef.current = null;
+    }
+    databaseHandleRef.current = null;
+  };
+
+  const closeDatabase = () => {
+    releaseDatabase();
+    setTweets([]);
+    setSelected(null);
+    setMediaFiles(new Map());
+    setStatus('Database closed.');
+  };
+
+  useEffect(() => {
+    window.addEventListener('pagehide', releaseDatabase);
+    return () => {
+      window.removeEventListener('pagehide', releaseDatabase);
+      releaseDatabase();
+    };
+  }, []);
+
   const loadDatabase = async (file) => {
     if (!file) return;
     setStatus('Reading database…');
     try {
+      if (databaseRef.current) databaseRef.current.close();
       const SQL = await initSqlJs({ locateFile: () => sqlWasmUrl });
       const db = new SQL.Database(new Uint8Array(await file.arrayBuffer()));
       databaseRef.current = db;
@@ -136,6 +161,11 @@ function App() {
           multiple: false,
           types: [{ description: 'SQLite database', accept: { 'application/vnd.sqlite3': ['.db', '.sqlite', '.sqlite3'] } }],
         });
+        if ((await handle.queryPermission({ mode: 'readwrite' })) !== 'granted' &&
+          (await handle.requestPermission({ mode: 'readwrite' })) !== 'granted') {
+          setStatus('Read/write permission is required to save tags automatically.');
+          return;
+        }
         databaseHandleRef.current = handle;
         await loadDatabase(await handle.getFile());
         return;
@@ -216,7 +246,7 @@ function App() {
   }, {}), [tweets]);
 
   return <div className="app-shell">
-    <header className="topbar"><div className="brand"><div className="brand-mark">✦</div><div><h1>Bookmark Library</h1><p>Local archive · private by default</p></div></div><div className="actions"><button className="button secondary" onClick={chooseDatabase}>Open database</button>{tweets.length > 0 && <button className="button secondary" onClick={downloadDatabase}>Download tagged database</button>}<button className="button" onClick={() => mediaInput.current?.click()}>Link media folder</button><input ref={dbInput} type="file" accept=".db,.sqlite,.sqlite3" hidden onChange={(event) => loadDatabase(event.target.files?.[0])} /><input ref={mediaInput} type="file" webkitdirectory="true" multiple hidden onChange={(event) => loadMedia(event.target.files)} /></div></header>
+    <header className="topbar"><div className="brand"><div className="brand-mark">✦</div><div><h1>Bookmark Library</h1><p>Local archive · private by default</p></div></div><div className="actions"><button className="button secondary" onClick={chooseDatabase}>Open database</button>{tweets.length > 0 && <><button className="button secondary" onClick={downloadDatabase}>Download tagged database</button><button className="button secondary" onClick={closeDatabase}>Close database</button></>}<button className="button" onClick={() => mediaInput.current?.click()}>Link media folder</button><input ref={dbInput} type="file" accept=".db,.sqlite,.sqlite3" hidden onChange={(event) => loadDatabase(event.target.files?.[0])} /><input ref={mediaInput} type="file" webkitdirectory="true" multiple hidden onChange={(event) => loadMedia(event.target.files)} /></div></header>
     <main>
       {tweets.length === 0 ? <section className="empty"><div className="empty-icon">✦</div><h2>Your archive, reconstructed locally.</h2><p>Open the <code>bookmarks.db</code> file created by the downloader, then optionally link its <code>media/</code> folder for previews.</p><div className="empty-actions"><button className="button" onClick={chooseDatabase}>Choose bookmarks.db</button><button className="button secondary" onClick={() => mediaInput.current?.click()}>Choose media folder</button></div><p className="privacy">Nothing is uploaded. The database is parsed in this browser tab.</p></section> : <>
         <section className="library-head"><div><p className="eyebrow">YOUR ARCHIVE</p><h2>{visibleTweets.length.toLocaleString()} <span>bookmarks</span></h2><p className="status">{status}</p></div><div className="stats"><span><b>{tweets.filter((tweet) => tweet.media.length).length.toLocaleString()}</b> with media</span><span><b>{tweets.filter((tweet) => tweet.rating > 0).length.toLocaleString()}</b> rated</span></div></section>
