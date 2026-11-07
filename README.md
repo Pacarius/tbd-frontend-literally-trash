@@ -42,8 +42,11 @@ python classify_images.py /path/to/bookmarks.db --device auto
 For AMD ROCm builds of PyTorch, `--device auto` uses the CUDA-compatible ROCm
 device when `torch.cuda.is_available()` is true. Use `--device cpu` to force
 CPU inference, `--media-dir /path/to/media` to override media discovery, and
-`--overwrite` to classify files that already have results. The browser library
-continues to read the same SQLite results table.
+`--overwrite` to classify files that already have results. Images are decoded
+concurrently, resized into 224x224 RGB inputs, and processed in bounded
+batches; each completed batch is committed to SQLite immediately. Tune loading
+with `--load-workers 4 --batch-size 8`. The browser library continues to read
+the same SQLite results table.
 
 ## Downloader duplicate-skip patch
 

@@ -4,8 +4,9 @@
 from __future__ import annotations
 
 import argparse
-import os
+import queue
 import sqlite3
+import threading
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
@@ -38,6 +39,7 @@ def main() -> None:
     parser.add_argument("--media-dir", type=Path, help="Media directory (default: database directory/media)")
     parser.add_argument("--device", default="auto", choices=("auto", "cuda", "cpu"), help="Inference device")
     parser.add_argument("--batch-size", type=int, default=8, help="Images per inference batch")
+    parser.add_argument("--load-workers", type=int, default=4, help="Concurrent image loading/resizing workers")
     parser.add_argument("--model", default="Falconsai/nsfw_image_detection", help="Hugging Face image classifier")
     parser.add_argument("--overwrite", action="store_true", help="Reclassify images already in the database")
     args = parser.parse_args()
@@ -57,8 +59,8 @@ def main() -> None:
         raise SystemExit(f"Database not found: {database}")
     if not media_dir.is_dir():
         raise SystemExit(f"Media directory not found: {media_dir}")
-    if args.batch_size < 1:
-        raise SystemExit("--batch-size must be positive")
+    if args.batch_size < 1 or args.load_workers < 1:
+        raise SystemExit("--batch-size and --load-workers must be positive")
 
     device = 0 if args.device == "cuda" or (args.device == "auto" and torch.cuda.is_available()) else -1
     device_name = "cuda" if device == 0 else "cpu"
@@ -90,7 +92,7 @@ def main() -> None:
     rows = connection.execute(
         f"""
         SELECT t.id AS tweet_id, t.screen_name, t.created_at,
-               t.id AS tweet_id, m.id AS media_id, m.url, m.type,
+               m.id AS media_id, m.url, m.type,
                m.{quoted_position_column} AS position
         FROM media m JOIN tweets t ON t.id = m.tweet_id
         WHERE lower(m.type) IN ('photo', 'image')
@@ -119,13 +121,56 @@ def main() -> None:
 
     classifier = pipeline("image-classification", model=args.model, device=device)
     now = datetime.now().astimezone().isoformat()
-    for start in range(0, len(work), args.batch_size):
-        batch = work[start : start + args.batch_size]
-        images = [Image.open(path).convert("RGB") for _, path in batch]
-        predictions = classifier(images, top_k=5, batch_size=args.batch_size)
+    image_queue = queue.Queue(maxsize=args.batch_size * args.load_workers * 2)
+    sentinel = object()
+
+    def load_and_resize(item):
+        filename, path = item
+        try:
+            with Image.open(path) as source:
+                image = source.convert("RGB")
+                image.thumbnail((224, 224), Image.Resampling.LANCZOS)
+                canvas = Image.new("RGB", (224, 224), "black")
+                canvas.paste(image, ((224 - image.width) // 2, (224 - image.height) // 2))
+                return filename, canvas, None
+        except Exception as error:
+            return filename, None, error
+
+    def loader(items):
+        for item in items:
+            image_queue.put(load_and_resize(item))
+        image_queue.put(sentinel)
+
+    chunks = [work[index::args.load_workers] for index in range(args.load_workers)]
+    loaders = [
+        threading.Thread(target=loader, args=(chunk,), daemon=True)
+        for chunk in chunks
+        if chunk
+    ]
+    for worker in loaders:
+        worker.start()
+
+    completed = 0
+    finished_loaders = 0
+    batch = []
+    while finished_loaders < len(loaders):
+        item = image_queue.get()
+        if item is sentinel:
+            finished_loaders += 1
+            continue
+        filename, image, error = item
+        if error:
+            print(f"Skipping {filename}: {error}")
+            completed += 1
+            continue
+        batch.append((filename, image))
+        if len(batch) < args.batch_size:
+            continue
+
+        predictions = classifier([image for _, image in batch], top_k=5, batch_size=args.batch_size)
         if predictions and isinstance(predictions[0], dict):
             predictions = [predictions]
-        for (filename, _), candidates in zip(batch, predictions):
+        for (filename, image), candidates in zip(batch, predictions):
             top = max(candidates, key=lambda item: item["score"])
             label = str(top["label"])
             connection.execute(
@@ -136,8 +181,34 @@ def main() -> None:
                 """,
                 (filename, category_for(label), label, float(top["score"]), args.model, now),
             )
+            image.close()
         connection.commit()
-        print(f"Classified {min(start + len(batch), len(work))}/{len(work)}")
+        completed += len(batch)
+        print(f"Classified {completed}/{len(work)}")
+        batch = []
+
+    if batch:
+        predictions = classifier([image for _, image in batch], top_k=5, batch_size=len(batch))
+        if predictions and isinstance(predictions[0], dict):
+            predictions = [predictions]
+        for (filename, image), candidates in zip(batch, predictions):
+            top = max(candidates, key=lambda item: item["score"])
+            label = str(top["label"])
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO image_classifications
+                (filename, category, source_label, score, model, classified_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (filename, category_for(label), label, float(top["score"]), args.model, now),
+            )
+            image.close()
+        connection.commit()
+        completed += len(batch)
+        print(f"Classified {completed}/{len(work)}")
+
+    for worker in loaders:
+        worker.join()
 
     connection.close()
 
