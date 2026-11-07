@@ -27,14 +27,23 @@ If the browser requires a gesture before restoring access, use **Restore last
 files**; this is required by browser file-permission rules and cannot be done
 silently on startup.
 
-**Classify images** runs the bundled NSFWJS MobileNet model locally against
-linked images. It labels the top result as Safe, Sensitive, or NSFW and never
-uploads image data. Classification is opt-in; videos are skipped because this
-small model is image-only. Results are written to an `image_classifications` table in the opened SQLite
-database. Inference uses a downscaled 224px canvas and the CPU backend to
-avoid GPU/WebGL resource pressure. TensorFlow scopes and the model are
-released after each run, classification yields between images, and **Stop
-classification** cancels a large run.
+The optional `classify_images.py` tool runs a PyTorch image classifier outside
+the browser and writes results to the same `image_classifications` table. It
+accepts the database path directly and uses the sibling `media/` directory by
+default:
+
+```bash
+python -m venv .venv
+. .venv/bin/activate
+python -m pip install -r requirements-classifier.txt
+python classify_images.py /path/to/bookmarks.db --device auto
+```
+
+For AMD ROCm builds of PyTorch, `--device auto` uses the CUDA-compatible ROCm
+device when `torch.cuda.is_available()` is true. Use `--device cpu` to force
+CPU inference, `--media-dir /path/to/media` to override media discovery, and
+`--overwrite` to classify files that already have results. The browser library
+continues to read the same SQLite results table.
 
 ## Downloader duplicate-skip patch
 
