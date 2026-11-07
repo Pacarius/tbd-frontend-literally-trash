@@ -46,6 +46,14 @@ original downloader checkout:
 git apply tbd-duplicate-skip.patch
 ```
 
+If you already applied that patch and still see the same duplicate page
+repeatedly, also apply `tbd-scroll-followup.patch`. It forces incremental
+scroll events so X requests the next virtualized timeline cursor:
+
+```bash
+git apply tbd-scroll-followup.patch
+```
+
 ## Desktop app
 
 The project includes an Electron wrapper so the library can run as one desktop

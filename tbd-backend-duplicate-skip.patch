@@ -1,0 +1,128 @@
+diff --git a/server.go b/server.go
+index cfe40df..3e05d1b 100644
+--- a/server.go
++++ b/server.go
+@@ -8,10 +8,10 @@ import (
+ )
+ 
+ type SyncResponse struct {
+-	Success               bool   `json:"success"`
+-	Message               string `json:"message"`
+-	DuplicateLimitReached bool   `json:"duplicate_limit_reached"`
+-	SavedCount            int    `json:"saved_count"`
++	Success           bool   `json:"success"`
++	Message           string `json:"message"`
++	SavedCount        int    `json:"saved_count"`
++	SkippedDuplicates int    `json:"skipped_duplicates"`
+ }
+ 
+ func StartServer(addr string) error {
+diff --git a/sync.go b/sync.go
+index 39a7c53..02176d8 100644
+--- a/sync.go
++++ b/sync.go
+@@ -2,7 +2,6 @@ package main
+ 
+ import (
+ 	"encoding/json"
+-	"net/url"
+ 	"regexp"
+ 	"time"
+ 
+@@ -37,8 +36,6 @@ Our Parsing Strategy (in processRawTweetResults):
+     This is crucial for data integrity and allows fixing parsing logic later without losing data.
+ */
+ 
+-const DUPLICATE_THRESHOLD = 5 // Stop syncing if we encounter this many existing tweets in a row
+-
+ // screenNameRegex is our last line of defense to extract the username if JSON structural parsing fails.
+ var screenNameRegex = regexp.MustCompile(`"screen_name"\s*:\s*"([^"]+)"`)
+ 
+@@ -240,28 +237,7 @@ func parseTweet(res json.RawMessage) (*TweetModel, error) {
+ // checks for duplicates, and saves them to the database.
+ func processRawTweetResults(results []json.RawMessage) SyncResponse {
+ 	savedCount := 0
+-	duplicateStreak := 0
+-	duplicateLimitReached := false
+-
+-	type belowCutoffEntry struct {
+-		URL        string
+-		MediaFiles []string
+-	}
+-	// Tweets saved after the duplicate streak had already tripped the cutoff.
+-	//
+-	// The cutoff rests on the assumption that a run of DUPLICATE_THRESHOLD
+-	// known tweets means everything below is known too, and a save past that
+-	// point is that assumption failing. What follows from it depends on the
+-	// caller: an ordinary sync halts on the cutoff, so whatever sits below
+-	// these tweets was never fetched, whereas a forced full scroll keeps going
+-	// and the same entries only mark where the assumption would have cut the
+-	// run short.
+-	//
+-	// Whether the flag was already set is the entire distinction. A normal
+-	// incremental page saves its handful of new bookmarks at the top and only
+-	// then walks into the old ones, which trips the flag before the page ends
+-	// and says nothing about anything being missed.
+-	var belowCutoff []belowCutoffEntry
++	skippedDuplicates := 0
+ 
+ 	for _, res := range results {
+ 		tm, err := parseTweet(res)
+@@ -275,51 +251,22 @@ func processRawTweetResults(results []json.RawMessage) SyncResponse {
+ 		var exists int64
+ 		DB.Model(&TweetModel{}).Where("id = ?", tweetID).Count(&exists)
+ 		if exists > 0 {
+-			duplicateStreak++
+-			if duplicateStreak >= DUPLICATE_THRESHOLD {
+-				duplicateLimitReached = true
+-			}
++			skippedDuplicates++
+ 			continue
+ 		}
+-		duplicateStreak = 0
+ 
+ 		if err := DB.Create(tm).Error; err == nil {
+ 			savedCount++
+-			if duplicateLimitReached {
+-				// Filenames the worker is about to derive, so the report names
+-				// the files on disk rather than URLs nobody can grep for.
+-				var mediaFilenames []string
+-				mediaCount := len(tm.Media)
+-				for i, m := range tm.Media {
+-					if parsedURL, err := url.Parse(m.URL); err == nil {
+-						mediaFilenames = append(mediaFilenames, buildFilename(tm, i, mediaCount, parsedURL))
+-					}
+-				}
+-				belowCutoff = append(belowCutoff, belowCutoffEntry{
+-					URL:        tm.PermanentURL,
+-					MediaFiles: mediaFilenames,
+-				})
+-			}
+ 		}
+ 	}
+ 
+-	PrintInfoF("Batch processing complete: %d new tweets saved. (Duplicate limit reached: %v)", savedCount, duplicateLimitReached)
+-
+-	if len(belowCutoff) > 0 {
+-		PrintWarningF("%d tweets were saved below the duplicate cutoff; unless this was a forced full scroll, the run stopped there and left the rest behind:", len(belowCutoff))
+-		for _, info := range belowCutoff {
+-			PrintWarningF("  [Below Cutoff] URL: %s", info.URL)
+-			for _, mf := range info.MediaFiles {
+-				PrintWarningF("                 Media: %s", mf)
+-			}
+-		}
+-	}
++	PrintInfoF("Batch processing complete: %d new tweets saved; %d duplicate posts skipped.", savedCount, skippedDuplicates)
+ 
+ 	return SyncResponse{
+-		Success:               true,
+-		Message:               "Raw sync complete",
+-		DuplicateLimitReached: duplicateLimitReached,
+-		SavedCount:            savedCount,
++		Success:           true,
++		Message:           "Raw sync complete",
++		SavedCount:        savedCount,
++		SkippedDuplicates: skippedDuplicates,
+ 	}
+ }
+ 

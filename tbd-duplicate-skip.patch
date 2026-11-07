@@ -1,5 +1,5 @@
 diff --git a/sync-bookmarks.user.js b/sync-bookmarks.user.js
-index e211a09..de331ff 100644
+index e211a09..3f394e5 100644
 --- a/sync-bookmarks.user.js
 +++ b/sync-bookmarks.user.js
 @@ -1,7 +1,7 @@
@@ -7,11 +7,28 @@ index e211a09..de331ff 100644
  // @name         Twitter Bookmarks Sync to Local
  // @namespace    http://tampermonkey.net/
 -// @version      0.3
-+// @version      0.4
++// @version      0.6
  // @description  Intercept XHR to sync bookmarks, with auto-scroll and unattended periodic sync.
  // @author       Gemini
  // @match        https://x.com/*
-@@ -210,11 +210,9 @@
+@@ -203,18 +203,24 @@
+ 
+     loop() {
+       if (!this.active) return
+-      window.scrollTo(0, document.body.scrollHeight)
++      // Calling scrollTo(document.body.scrollHeight) repeatedly can be a
++      // no-op once X has already placed the viewport at the bottom, which
++      // prevents its virtualized timeline from requesting the next cursor.
++      // Move through the page first, then settle at the current bottom.
++      const step = Math.max(window.innerHeight * 0.8, 400)
++      window.scrollBy({ top: step, left: 0, behavior: 'instant' })
++      setTimeout(() => {
++        if (this.active) window.scrollTo({ top: document.body.scrollHeight, left: 0, behavior: 'instant' })
++      }, 250)
+       this.timer = setTimeout(() => {
+         this.loop()
+-      }, 5000)
++      }, 3500)
      },
    }
  
@@ -26,9 +43,12 @@ index e211a09..de331ff 100644
    // No cap is placed on a run that is succeeding: the backend still reporting
    // new tweets means the scroll is doing real work, and cutting that off would
    // truncate a legitimate backfill. State resets on reload, so recovering is
-@@ -313,13 +311,11 @@
+@@ -311,18 +317,10 @@
+             onload: function (response) {
+               try {
                  const res = JSON.parse(response.responseText)
-                 if (res.duplicate_limit_reached) {
+-                if (res.duplicate_limit_reached) {
++                if (res.skipped_duplicates > 0 || res.saved_count > 0) {
                    SyncFailures.reset()
 -                  if (!UI.isForceMode()) {
 -                    Scroller.stop()
@@ -37,11 +57,11 @@ index e211a09..de331ff 100644
 -                    // Silent continuation in Force Mode
 -                    console.log(`[TBD] Limit hit (Force). Saved: ${res.saved_count}`)
 -                  }
-+                  UI.updateStatus(`DUPES SKIPPED:${res.saved_count}`, '#ff9f00')
-+                  console.log(`[TBD] Duplicate streak skipped. Saved: ${res.saved_count}`)
-+                  // Duplicate rows are not a terminal condition: the next
-+                  // page may contain older bookmarks that are not in the DB.
-+                  Scroller.start()
-                 } else if (res.saved_count > 0) {
-                   SyncFailures.reset()
-                   UI.updateStatus(`SAVED:${res.saved_count}`, '#0f0')
+-                } else if (res.saved_count > 0) {
+-                  SyncFailures.reset()
+-                  UI.updateStatus(`SAVED:${res.saved_count}`, '#0f0')
++                  UI.updateStatus(`SAVED:${res.saved_count} SKIPPED:${res.skipped_duplicates || 0}`, '#0f0')
++                  console.log(`[TBD] Saved ${res.saved_count}; skipped ${res.skipped_duplicates || 0} duplicate posts`)
+                   // The backend did not find enough duplicates, so this page was
+                   // largely new and more probably waits below it. A reload would
+                   // only fetch the same first page again, so paginate by
