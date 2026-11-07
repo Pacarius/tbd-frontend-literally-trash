@@ -23,6 +23,9 @@ the downloader's legacy GORM schema and its current Ent schema.
 
 The last database and media folder are cached in the browser. On the next
 launch, the app attempts to reopen them when the browser still grants access.
+If the browser requires a gesture before restoring access, use **Restore last
+files**; this is required by browser file-permission rules and cannot be done
+silently on startup.
 
 ## Desktop app
 

@@ -129,6 +129,7 @@ function App() {
   const [contextMenu, setContextMenu] = useState(null);
   const [recentTags, setRecentTags] = useState(() => JSON.parse(localStorage.getItem('bookmark-library-recent-tags') || '[]'));
   const [databaseName, setDatabaseName] = useState('bookmarks.db');
+  const [hasCachedFiles, setHasCachedFiles] = useState(false);
   const [status, setStatus] = useState('Choose your database to begin.');
   const dbInput = useRef(null);
   const mediaInput = useRef(null);
@@ -326,30 +327,41 @@ function App() {
     setStatus(`${tweets.length.toLocaleString()} bookmarks loaded · ${map.size.toLocaleString()} local media files linked.`);
   };
 
-  useEffect(() => {
-    let cancelled = false;
-    const restoreLastFiles = async () => {
-      try {
-        const databaseHandle = await readHandle('database');
-        if (!cancelled && databaseHandle && (await databaseHandle.queryPermission({ mode: 'read' })) === 'granted') {
+  const restoreLastFiles = async (requestPermission = false) => {
+    try {
+      const databaseHandle = await readHandle('database');
+      if (databaseHandle) {
+        const permission = await databaseHandle.queryPermission({ mode: 'read' });
+        if (permission === 'granted' || (requestPermission && await databaseHandle.requestPermission({ mode: 'read' }) === 'granted')) {
           databaseHandleRef.current = databaseHandle;
           await loadDatabase(await databaseHandle.getFile());
         }
-        const mediaHandle = await readHandle('media-directory');
-        if (!cancelled && mediaHandle && (await mediaHandle.queryPermission({ mode: 'read' })) === 'granted') {
+      }
+      const mediaHandle = await readHandle('media-directory');
+      if (mediaHandle) {
+        const permission = await mediaHandle.queryPermission({ mode: 'read' });
+        if (permission === 'granted' || (requestPermission && await mediaHandle.requestPermission({ mode: 'read' }) === 'granted')) {
           mediaDirectoryHandleRef.current = mediaHandle;
           const files = [];
           for await (const entry of mediaHandle.values()) {
             if (entry.kind === 'file' && MEDIA_EXTENSIONS.test(entry.name)) files.push(await entry.getFile());
           }
-          if (!cancelled) loadMedia(files);
+          loadMedia(files);
         }
-      } catch {
-        if (!cancelled) setStatus('Choose your database to begin.');
       }
-    };
-    restoreLastFiles();
-    return () => { cancelled = true; };
+      setHasCachedFiles(false);
+    } catch (error) {
+      setStatus(`Could not restore files: ${error.message}`);
+    }
+  };
+
+  useEffect(() => {
+    Promise.all([readHandle('database'), readHandle('media-directory')])
+      .then(async ([databaseHandle, mediaHandle]) => {
+        setHasCachedFiles(Boolean(databaseHandle || mediaHandle));
+        if (databaseHandle && await databaseHandle.queryPermission({ mode: 'read' }) === 'granted') restoreLastFiles();
+      })
+      .catch(() => {});
   }, []);
 
   const visibleTweets = useMemo(() => {
@@ -382,7 +394,7 @@ function App() {
   return <div className="app-shell">
     <header className="topbar"><div className="brand"><div className="brand-mark">✦</div><div><h1>Bookmark Library</h1><p>Local archive · private by default</p></div></div><div className="actions"><button className="button secondary" onClick={chooseDatabase}>Open database</button>{tweets.length > 0 && <><button className="button secondary" onClick={downloadDatabase}>Download tagged database</button><button className="button secondary" onClick={closeDatabase}>Close database</button></>}<button className="button" onClick={chooseMediaDirectory}>Link media folder</button><input ref={dbInput} type="file" accept=".db,.sqlite,.sqlite3" hidden onChange={(event) => loadDatabase(event.target.files?.[0])} /><input ref={mediaInput} type="file" webkitdirectory="true" multiple hidden onChange={(event) => loadMedia(event.target.files)} /></div></header>
     <main>
-      {tweets.length === 0 ? <section className="empty"><div className="empty-icon">✦</div><h2>Your archive, reconstructed locally.</h2><p>Open the <code>bookmarks.db</code> file created by the downloader, then optionally link its <code>media/</code> folder for previews.</p><div className="empty-actions"><button className="button" onClick={chooseDatabase}>Choose bookmarks.db</button><button className="button secondary" onClick={chooseMediaDirectory}>Choose media folder</button></div><p className="privacy">Nothing is uploaded. The database is parsed in this browser tab.</p></section> : <>
+      {tweets.length === 0 ? <section className="empty"><div className="empty-icon">✦</div><h2>Your archive, reconstructed locally.</h2><p>Open the <code>bookmarks.db</code> file created by the downloader, then choose its <code>media/</code> directory for previews.</p><div className="empty-actions"><button className="button" onClick={chooseDatabase}>Choose bookmarks.db</button><button className="button secondary" onClick={chooseMediaDirectory}>Choose media folder</button>{hasCachedFiles && <button className="button secondary" onClick={() => restoreLastFiles(true)}>Restore last files</button>}</div><p className="privacy">Nothing is uploaded. The database is parsed in this browser tab.</p></section> : <>
         <section className="library-head"><div><p className="eyebrow">YOUR ARCHIVE</p><h2>{visibleTweets.length.toLocaleString()} <span>bookmarks</span></h2><p className="status">{status}</p></div><div className="stats"><span><b>{tweets.filter((tweet) => tweet.media.length).length.toLocaleString()}</b> with media</span><span><b>{tweets.filter((tweet) => tweet.rating > 0).length.toLocaleString()}</b> rated</span></div></section>
         <section className="controls"><label className="search"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search bookmarks, authors, or text" /></label><select value={tagFilter} onChange={(event) => setTagFilter(event.target.value)}><option value="all">All tags</option>{Object.entries(tagCounts).sort(([a], [b]) => a.localeCompare(b)).map(([tag, count]) => <option key={tag} value={tag}>#{tag} ({count})</option>)}</select><select value={mediaTypeFilter} onChange={(event) => setMediaTypeFilter(event.target.value)}><option value="all">Any media type</option>{['photo', 'video', 'animated_gif'].map((type) => <option key={type} value={type}>{mediaTypeLabel(type)} ({mediaTypeCounts[type]})</option>)}</select><select value={sort} onChange={(event) => setSort(event.target.value)}><option value="newest">Newest first</option><option value="oldest">Oldest first</option></select><label className="page-size">Show <select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}><option value="12">12</option><option value="24">24</option><option value="48">48</option><option value="96">96</option></select> per page</label></section>
         <section className="grid">{pagedTweets.map((tweet) => <div key={tweet.id} onContextMenu={(event) => { event.preventDefault(); setContextMenu({ tweet, x: event.clientX, y: event.clientY }); }}><LibraryCard tweet={tweet} mediaFiles={mediaFiles} onOpen={setSelected} onImageOpen={openImage} /></div>)}</section>
