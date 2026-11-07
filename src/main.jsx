@@ -59,6 +59,13 @@ function formatDate(value) {
   return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(date);
 }
 
+function formatDownloaderTimestamp(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const pad = (part) => String(part).padStart(2, '0');
+  return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
+}
+
 function normalizeTweet(row) {
   const rawTags = row.tags;
   return {
@@ -220,7 +227,7 @@ function App() {
           const source = row.url || '';
           const path = source.split('?')[0];
           const extension = path.includes('.') ? path.slice(path.lastIndexOf('.')) : '';
-          const filenameBase = `twitter-@${tweet.screenName}-${new Date(tweet.createdAt).toISOString().replace(/[-:]/g, '').slice(0, 15).replace('T', '-')}-${tweet.id}`;
+          const filenameBase = `twitter-@${tweet.screenName}-${formatDownloaderTimestamp(tweet.createdAt)}-${tweet.id}`;
           const count = (mediaRows.values || []).filter((item) => String(item[mediaRows.columns.indexOf('tweet_id')]) === tweet.id).length;
           const position = row.position ?? row.index ?? 0;
           const filename = `${filenameBase}${count > 1 ? `-${position}` : ''}${extension}`;
