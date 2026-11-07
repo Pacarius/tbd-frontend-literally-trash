@@ -46,7 +46,9 @@ CPU inference, `--media-dir /path/to/media` to override media discovery, and
 concurrently, resized into 224x224 RGB inputs, and processed in bounded
 batches; each completed batch is committed to SQLite immediately. Tune loading
 with `--load-workers 4 --batch-size 8`. The browser library continues to read
-the same SQLite results table.
+the same SQLite results table. GPU runs default to FP16 to reduce ROCm model
+transfer time and memory; use `--dtype float32` if the GPU does not support
+FP16.
 
 ## Downloader duplicate-skip patch
 

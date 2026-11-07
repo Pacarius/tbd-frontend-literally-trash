@@ -38,6 +38,7 @@ def main() -> None:
     parser.add_argument("database", type=Path, help="Path to bookmarks.db")
     parser.add_argument("--media-dir", type=Path, help="Media directory (default: database directory/media)")
     parser.add_argument("--device", default="auto", choices=("auto", "cuda", "cpu"), help="Inference device")
+    parser.add_argument("--dtype", default="auto", choices=("auto", "float16", "float32"), help="Model precision")
     parser.add_argument("--batch-size", type=int, default=8, help="Images per inference batch")
     parser.add_argument("--load-workers", type=int, default=4, help="Concurrent image loading/resizing workers")
     parser.add_argument("--model", default="Falconsai/nsfw_image_detection", help="Hugging Face image classifier")
@@ -64,7 +65,9 @@ def main() -> None:
 
     device = 0 if args.device == "cuda" or (args.device == "auto" and torch.cuda.is_available()) else -1
     device_name = "cuda" if device == 0 else "cpu"
-    print(f"Using {device_name}; torch reports CUDA/ROCm={torch.cuda.is_available()}")
+    dtype = torch.float16 if args.dtype == "float16" or (args.dtype == "auto" and device == 0) else torch.float32
+    dtype_name = "float16" if dtype == torch.float16 else "float32"
+    print(f"Using {device_name}/{dtype_name}; torch reports CUDA/ROCm={torch.cuda.is_available()}", flush=True)
 
     connection = sqlite3.connect(database)
     connection.row_factory = sqlite3.Row
@@ -119,7 +122,14 @@ def main() -> None:
         connection.commit()
         return
 
-    classifier = pipeline("image-classification", model=args.model, device=device)
+    print(f"Loading classifier {args.model} onto {device_name}; this can take a while on first run.", flush=True)
+    classifier = pipeline(
+        "image-classification",
+        model=args.model,
+        device=device,
+        model_kwargs={"torch_dtype": dtype},
+    )
+    print("Classifier ready.", flush=True)
     now = datetime.now().astimezone().isoformat()
     image_queue = queue.Queue(maxsize=args.batch_size * args.load_workers * 2)
     sentinel = object()
